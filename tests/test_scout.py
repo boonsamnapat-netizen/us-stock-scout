@@ -116,4 +116,4 @@ def test_portfolio_sim_respects_caps():
     for side in tr["side"]:
         held += 1 if side == "buy" else -1
         assert 0 <= held <= 5
-    assert res["equity"].iloc[0] == 1.0
+    assert 0.99 < res["equity"].iloc[0] <= 1.0   # day-1 buys pay fees
