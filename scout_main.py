@@ -87,7 +87,7 @@ def main(argv=None) -> int:
     else:
         cls = pd.DataFrame.from_dict(state["watch"], orient="index")
         cls[["good", "emerging"]] = cls[["good", "emerging"]].astype(bool)
-        cand = [t for t in cls.index if stage.get(t) in ("breakout", "pullback") and prev.get(t) != stage.get(t)]
+        cand = [t for t in cls.index if stage.get(t) == "pullback" and prev.get(t) != stage.get(t)]
         print(f"[scout] daily: {len(cand)} watchlist stock(s) changed stage -> fetching their data")
         fund = data.fetch_fundamentals(cand) if cand else pd.DataFrame(columns=data.INFO_FIELDS)
         est = estimates.fetch(cand) if cand else pd.DataFrame(columns=estimates.FIELDS)

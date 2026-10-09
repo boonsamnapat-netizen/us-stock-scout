@@ -16,7 +16,12 @@ import pandas as pd
 from .brief import SECTOR_SHORT, thdate
 from .report import next_earnings
 
-STAGE_TH = {"breakout": "🚀 เพิ่งทะลุกรอบ", "pullback": "🔄 ย่อในขาขึ้น", "uptrend": "📈 ขาขึ้น", "none": "–"}
+STAGE_TH = {"breakout": "📈 ทำจุดสูงใหม่", "pullback": "🔄 ย่อในขาขึ้น", "uptrend": "📈 ขาขึ้น", "none": "–"}
+# Backtest 2015–2026 (research_stages.py, vs equal-weight universe, costs, next-day entry):
+# breakouts UNDERPERFORMED (12m ≈ −7…−9%, t≈−2); pullbacks ≈ +0.7% (t≈0.3, noise) but ≈ +7% vs chasing
+# uptrends. So no 🚀 buy section; 🔄 is shown as "not chasing", not as a proven edge.
+HONESTY = ("<i>จังหวะกราฟ: ทดสอบย้อนหลัง 2015–26 แล้ว 'ไม่ชนะหุ้นเฉลี่ยอย่างมีนัย' "
+           "(🔄 ย่อ ≈ เท่าหุ้นเฉลี่ย แต่ดีกว่าไล่ซื้อตอนวิ่งแรง) · พื้นฐาน/ประมาณการ: ทดสอบย้อนหลังไม่ได้</i>")
 
 
 def _ok(x) -> bool:
@@ -92,7 +97,7 @@ def warn_icons(t, fund, vol, today) -> str:
 
 def line(t, cls, fund, est, stage, dd, vol, today) -> str:
     hs = highlights(t, cls, fund, est)
-    note = {"breakout": "ทะลุกรอบ 6 เดือน", "pullback": f"ย่อ {abs(dd.get(t, 0)) * 100:.0f}% จากจุดสูงสุด",
+    note = {"breakout": "ทำจุดสูงใหม่ (ระวังไล่ราคา)", "pullback": f"ย่อ {abs(dd.get(t, 0)) * 100:.0f}% จากจุดสูงสุด",
             "uptrend": "ขาขึ้น ใกล้จุดสูงสุด"}.get(stage.get(t), "")
     txt = " · ".join(hs + ([note] if note else []))
     ic = warn_icons(t, fund, vol, today)
@@ -107,7 +112,7 @@ def weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, n=8) -
     vol = close.pct_change().iloc[-60:].std() * np.sqrt(252)
     up = spy.iloc[-1] > spy.rolling(200).mean().iloc[-1]
     head = [f"<b>🔭 Stock Scout · สัปดาห์ {thdate(asof, True)}</b>",
-            f"ตลาด (SPY): {'🟢 ขาขึ้น' if up else '🔴 ขาลง — ระวัง สัญญาณกราฟเชื่อถือได้น้อยลง'}",
+            f"ตลาด (SPY): {'🟢 ขาขึ้น' if up else '🔴 ขาลง'}",
             f"<i>พื้นฐานดี {int(cls['good'].sum())} ตัว · กำลังจะกำไร {int(cls['emerging'].sum())} ตัว "
             f"จาก {len(cls)} ตัว (S&amp;P 1500 + Nasdaq-100)</i>"]
 
@@ -128,12 +133,13 @@ def weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, n=8) -
         lines += [line(t, cls, fund, est, stage, dd, vol, today) for t in picks] or ["– ไม่มีสัปดาห์นี้"]
         return lines, picks
 
-    s1, p1 = section("🚀 พื้นฐานดี + เพิ่งเริ่มวิ่ง", cls["good"] & (stage == "breakout"), n)
-    s2, p2 = section("🔄 พื้นฐานดี + ย่อในขาขึ้น (รอจังหวะ)", cls["good"] & (stage == "pullback"), n)
-    s3, p3 = section("🌱 กำลังจะกำไร ⚠️เสี่ยงสูง (รายได้โตแรง ขาดทุนลดลง)",
-                     cls["emerging"] & stage.isin(["breakout", "pullback", "uptrend"]), 5)
+    s1, p1 = section("🔄 พื้นฐานดี + กำลังย่อในขาขึ้น (ไม่ต้องไล่ราคา)", cls["good"] & (stage == "pullback"), n)
+    rest = cls["good"] & ~cls.index.isin(p1)
+    s2, p2 = section("✅ พื้นฐาน + อนาคตดีที่สุด (จังหวะไหนก็ได้)", rest, n)
+    s3, p3 = section("🌱 กำลังจะกำไร ⚠️เสี่ยงสูง (รายได้โตแรง ขาดทุนลดลง)", cls["emerging"], 5)
     foot = ["", "📅 งบออกใน 2 สัปดาห์ · 🎢 ผันผวนสูง · (เล็ก) มูลค่าบริษัท < $3B สภาพคล่องต่ำกว่า",
-            "<i>เป็นรายชื่อให้ศึกษาต่อ ไม่ใช่คำแนะนำซื้อ · ข้อมูล Yahoo Finance · ประมาณการนักวิเคราะห์อาจผิด</i>"]
+            HONESTY,
+            "<i>รายชื่อให้ศึกษาต่อ ไม่ใช่คำแนะนำซื้อ · ข้อมูล Yahoo Finance · ประมาณการนักวิเคราะห์อาจผิด</i>"]
     msgs = [{"text": "\n".join(head + g_lines)}, {"text": "\n".join(s1 + s2 + s3 + foot).strip()}]
     tops = [p[0] for p in (p1, p2, p3) if p]
     return msgs, tops
@@ -182,17 +188,17 @@ def daily_alerts(asof, cls, fund, est, stage, prev_stage: dict, dd, close,
         a = last_alert.get(t)
         return not a or a.get("stage") != stage.get(t) or (asof - pd.Timestamp(a["date"])).days > cooldown_days
 
-    new = [t for t in watch if stage.get(t) in ("breakout", "pullback")
+    new = [t for t in watch if stage.get(t) == "pullback"
            and t in prev_stage and prev_stage[t] != stage.get(t) and cooled(t)]
     if not new:
         return None
     new = sorted(new, key=lambda t: -(cls.loc[t, "fscore"] if _ok(cls.loc[t, "fscore"]) else 0))[:10]
-    lines = [f"<b>🔔 Scout · {thdate(asof)} — หุ้นพื้นฐานดีเข้าจังหวะใหม่</b>", ""]
-    for kind in ("breakout", "pullback"):
+    lines = [f"<b>🔔 Scout · {thdate(asof)} — หุ้นพื้นฐานดีเพิ่งย่อเข้าโซน 🔄</b>", ""]
+    for kind in ("pullback",):
         ts = [t for t in new if stage.get(t) == kind]
         if ts:
             lines.append(f"<b>{STAGE_TH[kind]}</b>")
             lines += [line(t, cls, fund, est, stage, dd, vol, today)
                       + (" 🌱" if cls.loc[t, "emerging"] else "") for t in ts]
-    lines += ["", "<i>รายชื่อให้ศึกษาต่อ ไม่ใช่คำแนะนำซื้อ</i>"]
+    lines += ["", "<i>รายชื่อให้ศึกษาต่อ ไม่ใช่คำแนะนำซื้อ · จังหวะย่อไม่ได้ชนะหุ้นเฉลี่ยอย่างมีนัยในการทดสอบย้อนหลัง</i>"]
     return {"text": "\n".join(lines), "tickers": new}

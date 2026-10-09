@@ -276,7 +276,7 @@ def test_scout_classify_and_alerts():
     assert cls.loc["EMRG", "emerging"] and not cls.loc["EMRG", "good"]
     assert not cls.loc["BAD", "good"] and not cls.loc["BAD", "emerging"]
     close = _series_close({t: np.linspace(50, 100, 300) for t in tick})
-    stage = pd.Series({"GOOD": "breakout", "EMRG": "pullback", "BAD": "breakout"})
+    stage = pd.Series({"GOOD": "pullback", "EMRG": "pullback", "BAD": "pullback"})
     dd = pd.Series({"GOOD": 0.0, "EMRG": -0.15, "BAD": 0.0})
     none = {t: "none" for t in tick}
     msg = sr.daily_alerts(close.index[-1], cls, fund, est, stage, none, dd, close)

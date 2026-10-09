@@ -26,8 +26,11 @@ Decision-support only; no profit guarantee — always quote honest, net-of-fees 
 
 ## Stock Scout (current product, 2026-10-09)
 - `scout_main.py` + `scout/{estimates,stages,scout_report}.py`, workflow `scout.yml` (weekday 23:15 UTC):
-  Friday close → weekly report (🔥 groups, 🚀 good+breakout, 🔄 good+pullback, 🌱 emerging, heatmap,
-  cards); other days → alert only when a watchlist stock newly enters 🚀/🔄 (state `data/scout_state.json`).
+  Friday-UTC run → weekly report; other days → alerts (state `data/scout_state.json`, cached watchlist).
+- 2026-10-09 (owner approved): NO 🚀 breakout section — research_stages (1,518 stocks, vs equal-weight
+  universe, costs, NW t) showed breakouts underperform (12m −7…−9%, t≈−2), pullbacks ≈ noise (+0.7%)
+  but beat chasing uptrends (~+7%). Weekly = 🔥 groups, 🔄 good+pullback, ✅ top good, 🌱 emerging;
+  daily alerts only for watchlist stocks newly entering 🔄. Every report carries the HONESTY note.
 - "Good" = profitable TTM + next-year EPS & revenue growth expected + estimates not cut.
   "🌱 Emerging" (owner asked Claude to decide): unprofitable but revenue ≥ +25% YoY, losses narrowing,
   analysts expect profit next year — always flagged high risk.
