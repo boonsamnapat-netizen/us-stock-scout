@@ -44,7 +44,10 @@ def main(argv=None) -> int:
         est = estimates.demo(close.columns)
         spy = bench["SPY"]
     else:
-        universe, src = uni.load_universe(cfg, str(BASE))
+        universe, src = (uni.load_extended(cfg, str(BASE))
+                         if cfg.get("scout", {}).get("universe", "extended") == "extended"
+                         else uni.load_universe(cfg, str(BASE)))
+        print(f"[scout] universe {len(universe)} ({src})")
         tickers = universe["ticker"].tolist()[: a.limit or None]
         close_all, volume = data.fetch_prices(tickers + ["SPY"], 3)
         spy = close_all["SPY"]
@@ -63,7 +66,7 @@ def main(argv=None) -> int:
     panels = stages.stage_panels(close, volume)
     stage = stages.stage_today(panels)
     dd = panels["dd"].iloc[-1]
-    cls = sr.classify(fund, est, close.columns)
+    cls = sr.classify(fund, est, close.columns, cfg.get("scout", {}).get("good_top_pct", 0.30))
 
     state_path = BASE / STATE_FILE if not (a.demo or a.limit) else out / "scout_state_test.json"
     prev = json.loads(state_path.read_text()).get("stage", {}) if state_path.exists() else {}

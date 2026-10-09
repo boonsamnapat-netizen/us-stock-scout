@@ -18,12 +18,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--years", type=int, default=11)
     ap.add_argument("--demo", action="store_true")
+    ap.add_argument("--universe", choices=["base", "extended"], default="extended")
     a = ap.parse_args()
     if a.demo:
         _, close, volume, bench, _ = data.demo_data(n=120, years=6)
         spy = bench["SPY"]
     else:
-        u, src = uni.load_universe(yaml.safe_load(open("config.yaml")), ".")
+        cfg = yaml.safe_load(open("config.yaml"))
+        u, src = uni.load_extended(cfg, ".") if a.universe == "extended" else uni.load_universe(cfg, ".")
         close_all, volume = data.fetch_prices(u["ticker"].tolist() + ["SPY"], a.years)
         spy, close = close_all["SPY"], close_all.drop(columns=["SPY"])
         volume = volume.drop(columns=["SPY"], errors="ignore")

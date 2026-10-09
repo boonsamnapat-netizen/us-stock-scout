@@ -32,7 +32,7 @@ def upct(x) -> str:
 
 
 # ------------------------------------------------------------------ classification
-def classify(fund: pd.DataFrame, est: pd.DataFrame, tickers) -> pd.DataFrame:
+def classify(fund: pd.DataFrame, est: pd.DataFrame, tickers, good_top_pct: float = 0.30) -> pd.DataFrame:
     f = fund.reindex(tickers)
     e = est.reindex(tickers)
     ttm = e["ni_ttm"].where(e["ni_ttm"].notna(), np.where(f["profitMargins"] > 0, 1.0, np.nan))
@@ -52,6 +52,8 @@ def classify(fund: pd.DataFrame, est: pd.DataFrame, tickers) -> pd.DataFrame:
     }
     pr = pd.DataFrame(parts)
     score = pr.mean(axis=1).where(pr.notna().sum(axis=1) >= 3)
+    # "good" = passes the gates AND fundamental score in the top `good_top_pct` of the whole universe
+    good = good & (score.rank(pct=True) >= 1 - good_top_pct)
     out = pd.DataFrame({"good": good.fillna(False), "emerging": emerging.fillna(False), "fscore": score})
     return out.join(pr.add_prefix("r_"))
 
@@ -94,7 +96,9 @@ def line(t, cls, fund, est, stage, dd, vol, today) -> str:
             "uptrend": "ขาขึ้น ใกล้จุดสูงสุด"}.get(stage.get(t), "")
     txt = " · ".join(hs + ([note] if note else []))
     ic = warn_icons(t, fund, vol, today)
-    return f"<code>{escape(t):<5}</code> {escape(txt)}{(' ' + ic) if ic else ''}"
+    mc = fund.loc[t].get("marketCap") if t in fund.index else None
+    size = " <i>(เล็ก)</i>" if _ok(mc) and mc < 3e9 else ""
+    return f"<code>{escape(t):<5}</code> {escape(txt)}{(' ' + ic) if ic else ''}{size}"
 
 
 # ------------------------------------------------------------------ messages
@@ -105,7 +109,7 @@ def weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, n=8) -
     head = [f"<b>🔭 Stock Scout · สัปดาห์ {thdate(asof, True)}</b>",
             f"ตลาด (SPY): {'🟢 ขาขึ้น' if up else '🔴 ขาลง — ระวัง สัญญาณกราฟเชื่อถือได้น้อยลง'}",
             f"<i>พื้นฐานดี {int(cls['good'].sum())} ตัว · กำลังจะกำไร {int(cls['emerging'].sum())} ตัว "
-            f"จาก {len(cls)} ตัว (S&amp;P 500 + Nasdaq-100)</i>"]
+            f"จาก {len(cls)} ตัว (S&amp;P 1500 + Nasdaq-100)</i>"]
 
     # 🔥 groups
     ind = fund["industry"]
@@ -128,7 +132,7 @@ def weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, n=8) -
     s2, p2 = section("🔄 พื้นฐานดี + ย่อในขาขึ้น (รอจังหวะ)", cls["good"] & (stage == "pullback"), n)
     s3, p3 = section("🌱 กำลังจะกำไร ⚠️เสี่ยงสูง (รายได้โตแรง ขาดทุนลดลง)",
                      cls["emerging"] & stage.isin(["breakout", "pullback", "uptrend"]), 5)
-    foot = ["", "📅 งบออกใน 2 สัปดาห์ · 🎢 ผันผวนสูง",
+    foot = ["", "📅 งบออกใน 2 สัปดาห์ · 🎢 ผันผวนสูง · (เล็ก) มูลค่าบริษัท < $3B สภาพคล่องต่ำกว่า",
             "<i>เป็นรายชื่อให้ศึกษาต่อ ไม่ใช่คำแนะนำซื้อ · ข้อมูล Yahoo Finance · ประมาณการนักวิเคราะห์อาจผิด</i>"]
     msgs = [{"text": "\n".join(head + g_lines)}, {"text": "\n".join(s1 + s2 + s3 + foot).strip()}]
     tops = [p[0] for p in (p1, p2, p3) if p]

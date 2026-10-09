@@ -33,3 +33,7 @@ model_portfolio:                  # กติกา E3 (เจ้าของเ
   max_vol: 0.60                   # ไม่ซื้อหุ้นผันผวนเกิน 60%/ปี
   gate_sma: 200                   # SPY ต่ำกว่าเส้น 200 วัน = ขายหมด ถือเงินสด
   max_trades_month: 5             # Dime แพ็กเกจฟรี 5 ครั้ง/เดือน
+
+scout:                            # Stock Scout (ผลิตภัณฑ์ปัจจุบัน)
+  universe: extended              # extended = S&P 500 + Nasdaq-100 + S&P MidCap 400 + SmallCap 600
+  good_top_pct: 0.30              # "พื้นฐานดี" = ผ่านเกณฑ์ + คะแนนพื้นฐาน 30% บนของทั้งจักรวาล

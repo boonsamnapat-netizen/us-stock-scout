@@ -7,6 +7,8 @@ import pandas as pd
 import requests
 
 SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+SP400_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"
+SP600_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_600_companies"
 NDX_CSV_URL = ("https://raw.githubusercontent.com/Gary-Strauss/NASDAQ100_Constituents/"
                "master/data/nasdaq100_constituents.csv")
 UA = {"User-Agent": "us-stock-scout/1.0 (personal research tool)"}
@@ -119,3 +121,35 @@ def fill_sectors(universe: pd.DataFrame, fundamentals: pd.DataFrame) -> pd.DataF
         u["industry"] = u["industry"].fillna(fundamentals["industry"].reindex(u.index))
     u["sector"] = u["sector"].fillna("Unknown")
     return u.reset_index()
+
+
+def _fetch_sp(url: str, flag: str) -> pd.DataFrame:
+    t = _find(_read_tables(url), ["Symbol", "Security", "GICS Sector"])
+    t = t.rename(columns={"Symbol": "ticker", "Security": "name", "GICS Sector": "sector",
+                          "GICS Sub-Industry": "industry"})
+    t = t[["ticker", "name", "sector", "industry"]].assign(**{flag: True})
+    t["ticker"] = t["ticker"].map(normalize_ticker)
+    return t
+
+
+def load_extended(cfg: dict, base_dir: str = ".") -> tuple[pd.DataFrame, str]:
+    """S&P 500 + Nasdaq-100 + S&P MidCap 400 + S&P SmallCap 600 (= S&P 1500 + NDX).
+    Each extra index falls back to data/universe_ext.csv if Wikipedia is unreachable."""
+    u, src = load_universe(cfg, base_dir)
+    snap_path = f"{base_dir}/data/universe_ext.csv"
+    labels = [src]
+    for url, flag in ((SP400_URL, "in_sp400"), (SP600_URL, "in_sp600")):
+        try:
+            extra = _fetch_sp(url, flag)
+            labels.append(f"{flag[3:]}:wikipedia")
+        except Exception as e:
+            print(f"[universe] {flag} failed: {e!r}; using snapshot")
+            snap = pd.read_csv(snap_path)
+            extra = snap[snap[flag]][["ticker", "name", "sector", "industry"]].assign(**{flag: True})
+            labels.append(f"{flag[3:]}:snapshot")
+        u = u.merge(extra, on="ticker", how="outer", suffixes=("", "_x"))
+        for c in ("name", "sector", "industry"):
+            u[c] = u[c].fillna(u.pop(c + "_x"))
+    for f in ("in_sp500", "in_ndx", "in_sp400", "in_sp600"):
+        u[f] = u[f].fillna(False).astype(bool) if f in u else False
+    return u.sort_values("ticker").reset_index(drop=True), " + ".join(labels)
