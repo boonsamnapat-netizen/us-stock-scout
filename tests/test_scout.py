@@ -102,3 +102,18 @@ def test_brief_messages(tmp_path):
 def test_grades():
     from scout.brief import grade
     assert [grade(x) for x in (0.95, 0.7, 0.5, 0.3, 0.1, float("nan"))] == ["A", "B", "C", "D", "F", "–"]
+
+
+def test_portfolio_sim_respects_caps():
+    from scout.portfolio_bt import Rules, simulate
+    _, close, _, bench, _ = data.demo_data(n=80, years=4)
+    res = simulate(close, bench["SPY"], Rules(gate="nobuy", max_trades_month=5))
+    tr = res["trades"]
+    assert len(tr) > 0
+    per_month = tr.groupby(tr["date"].dt.to_period("M")).size()
+    assert per_month.max() <= 5
+    held = 0
+    for side in tr["side"]:
+        held += 1 if side == "buy" else -1
+        assert 0 <= held <= 5
+    assert res["equity"].iloc[0] == 1.0
