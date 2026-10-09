@@ -141,6 +141,8 @@ def fetch_all(tickers: list[str], pause: float = 0.25) -> dict[str, dict[str, pd
     first = True
     out, missing = {}, []
     for t in tickers:
+        if len(out) == 0 and len(missing) >= 10:
+            raise RuntimeError("EDGAR: first 10 requests all failed (SEC is blocking this IP) — aborting")
         cik = ciks.get(t)
         if cik is None:
             missing.append(t)

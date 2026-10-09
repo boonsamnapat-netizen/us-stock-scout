@@ -28,7 +28,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: mkdir -p output && python research_portfolio.py --years "${{ inputs.years }}" --fee "${{ inputs.fee }}" ${{ inputs.fundamentals && '--fundamentals' || '' }}
+      - run: mkdir -p output && python -u research_portfolio.py --years "${{ inputs.years }}" --fee "${{ inputs.fee }}" ${{ inputs.fundamentals && '--fundamentals' || '' }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
