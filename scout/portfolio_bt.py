@@ -26,6 +26,7 @@ class Rules:
     stop_loss_pct: float = 0.0   # sell a holding that falls this much below its entry (0 = off)
     max_vol: float = 0.0         # skip buys with 60-day annualised vol above this (0 = off)
     invest_frac: float = 1.0     # fraction of equity in stocks; rest stays cash
+    max_per_sector: int = 0      # max holdings per GICS sector (0 = no limit)
 
 
 def score_panel(close: pd.DataFrame) -> pd.DataFrame:
@@ -52,7 +53,7 @@ def value_of(state: dict, price: pd.Series) -> float:
 
 
 def decide_day(state: dict, date: pd.Timestamp, rank: pd.Series, price: pd.Series, vol: pd.Series,
-               up: bool, rules: Rules) -> list[dict]:
+               up: bool, rules: Rules, sectors: pd.Series | None = None) -> list[dict]:
     """Apply the rules for one check day. Mutates `state`; returns the trades made.
     Shared by the backtest and the live model portfolio so both follow identical rules.
     rank: 0 = best (pct), NaN = below 200-day SMA / no score."""
@@ -105,6 +106,10 @@ def decide_day(state: dict, date: pd.Timestamp, rank: pd.Series, price: pd.Serie
                 continue
             if rules.max_vol and vol.get(t, np.nan) > rules.max_vol:
                 continue
+            if rules.max_per_sector and sectors is not None:
+                sec = sectors.get(t, "Unknown")
+                if sum(sectors.get(h, "Unknown") == sec for h in units) >= rules.max_per_sector:
+                    continue
             alloc = min(state["cash"], value * rules.invest_frac / rules.n_hold)
             if alloc <= 0:
                 break
@@ -127,7 +132,7 @@ def signals(close: pd.DataFrame, bench: pd.Series, rules: Rules):
 
 
 def simulate(close: pd.DataFrame, bench: pd.Series, rules: Rules, start: int = 273,
-             score: pd.DataFrame | None = None) -> dict:
+             score: pd.DataFrame | None = None, sectors: pd.Series | None = None) -> dict:
     if score is None:
         rank, vol, up = signals(close, bench, rules)
     else:
@@ -150,7 +155,7 @@ def simulate(close: pd.DataFrame, bench: pd.Series, rules: Rules, start: int = 2
     for i in range(start, len(dates)):
         price = close.iloc[i]
         if is_check(i):
-            log += decide_day(state, dates[i], rank.iloc[i], price, vol.iloc[i], bool(up.iloc[i]), rules)
+            log += decide_day(state, dates[i], rank.iloc[i], price, vol.iloc[i], bool(up.iloc[i]), rules, sectors)
         equity.append(value_of(state, price))
 
     eq = pd.Series(equity, index=dates[start:])

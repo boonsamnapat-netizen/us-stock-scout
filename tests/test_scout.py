@@ -158,3 +158,15 @@ def test_model_portfolio_idempotent_and_message(tmp_path):
     msg = mp.message(v2, sc, spy)
     assert "ซื้อ" in msg and _html_balanced(msg)
     assert 1 <= len(v1["doc"]["state"]["units"]) <= 5
+
+
+def test_sector_cap():
+    from scout.portfolio_bt import Rules, decide_day, new_state
+    rank = pd.Series({"A1": 0.01, "A2": 0.02, "A3": 0.03, "B1": 0.04, "C1": 0.05})
+    price = pd.Series(100.0, index=rank.index)
+    vol = pd.Series(0.2, index=rank.index)
+    sectors = pd.Series({"A1": "Energy", "A2": "Energy", "A3": "Energy", "B1": "Tech", "C1": "Health"})
+    st = new_state()
+    decide_day(st, pd.Timestamp("2026-10-08"), rank, price, vol, True,
+               Rules(max_per_sector=2, entry_pct=1.0, max_vol=0.6), sectors)
+    assert set(st["units"]) == {"A1", "A2", "B1", "C1"}      # A3 skipped: 3rd Energy name
