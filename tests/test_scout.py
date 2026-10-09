@@ -208,3 +208,23 @@ def test_edgar_panel_has_no_lookahead():
     assert abs(panel.loc["2024-05-02"] - 0.5) < 1e-9   # Q1'24 vs Q1'23: 15 vs 10 = +50%
     ttm = fu.to_panel({"X": s}, "ttm", dates)["X"]
     assert ttm.loc["2024-05-02"] == 45                 # 10+10+10+15
+
+
+def test_portfolio_f_only_buys_eligible(tmp_path):
+    from scout import model_portfolio as mp
+    u, close, spy, fund = _uptrend_demo()
+    fund = fund.copy()
+    fund["profitMargins"] = 0.1
+    fund["earningsQuarterlyGrowth"] = 0.1
+    fund["revenueGrowth"] = 0.1
+    fund["trailingEps"], fund["forwardEps"] = 1.0, 2.0
+    bad = list(close.columns[::2])
+    fund.loc[bad, "revenueGrowth"] = -0.1                    # half the universe fails the filter
+    elig = mp.fundamental_filter(fund, close.columns)
+    assert not elig[bad].any() and elig.drop(bad).all()
+    v = mp.update(close, spy, {"model_portfolio": {"max_vol": 0.9}}, str(tmp_path / "f.json"), eligible=elig)
+    held = set(v["doc"]["state"]["units"])
+    assert held and not held & set(bad)
+    v_e = mp.update(close, spy, {"model_portfolio": {"max_vol": 0.9}}, str(tmp_path / "e.json"))
+    line = mp.compare_line(v_e, v, spy)
+    assert "พอร์ตทดลอง F" in line and _html_balanced(line)

@@ -23,6 +23,9 @@ Decision-support only; no profit guarantee — always quote honest, net-of-fees 
 ## Design notes
 - `portfolio_bt.decide_day` is the single rule engine for BOTH backtest and live portfolio
   (test asserts live day-by-day == simulate). Change rules only there + config `model_portfolio`.
+- Paper portfolio **F** (owner chose, forward test only): E3 + entry filter `model_portfolio.fundamental_filter`
+  (profitable, quarterly NI & revenue YoY > 0, forwardEps > trailingEps; yfinance today). State
+  `data/model_portfolio_f.json`. Owner trades E3 only. SEC EDGAR blocks GitHub Actions → no fundamental backtest.
 - State: `data/model_portfolio.json`, committed by the daily workflow; `--limit`/`--demo` runs never touch it.
 - Only the short score is backtested (price-only, rules fixed from literature, no fitting).
   Mid/long use today's yfinance fundamentals — no point-in-time history → not backtestable yet.

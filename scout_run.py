@@ -22,6 +22,7 @@ from scout.portfolio_bt import simulate
 
 BASE = Path(__file__).resolve().parent
 PORTFOLIO_FILE = "data/model_portfolio.json"
+PORTFOLIO_F_FILE = "data/model_portfolio_f.json"
 
 
 def main(argv=None) -> int:
@@ -45,7 +46,8 @@ def main(argv=None) -> int:
     else:
         universe, src = uni.load_universe(cfg, str(BASE))
         tickers = universe["ticker"].tolist()
-        held = list((mp.load(str(BASE / PORTFOLIO_FILE)) or {}).get("state", {}).get("units", {}))
+        held = [t for f in (PORTFOLIO_FILE, PORTFOLIO_F_FILE)
+                for t in (mp.load(str(BASE / f)) or {}).get("state", {}).get("units", {})]
         tickers += [t for t in held if t not in tickers]   # keep pricing names that left the index
         if a.limit:
             tickers = tickers[:a.limit]
@@ -84,7 +86,9 @@ def main(argv=None) -> int:
     # --- model portfolio (only full real runs may advance the real state file)
     pf_path = str(BASE / PORTFOLIO_FILE) if not (a.demo or a.limit) else str(out / "model_portfolio_test.json")
     view = mp.update(close, spy, cfg, pf_path)
-    messages = [{"text": mp.message(view, scores, spy)}]
+    pf_f_path = str(BASE / PORTFOLIO_F_FILE) if not (a.demo or a.limit) else str(out / "model_portfolio_f_test.json")
+    view_f = mp.update(close, spy, cfg, pf_f_path, eligible=mp.fundamental_filter(fund, close.columns))
+    messages = [{"text": mp.message(view, scores, spy) + "\n\n" + mp.compare_line(view, view_f, spy)}]
     if hm:
         messages.append({"photo": hm, "caption": "🗺 แผนที่ตลาด 1 เดือน · ขนาด = มูลค่าบริษัท · เขียวขึ้น / แดงลง"})
     buys = [t["ticker"] for t in view["today"] if t["side"] == "buy"]

@@ -15,6 +15,7 @@ INFO_FIELDS = [
     "targetMeanPrice", "targetLowPrice", "targetHighPrice",
     "recommendationMean", "recommendationKey", "numberOfAnalystOpinions",
     "dividendYield", "beta", "earningsTimestamp", "earningsTimestampStart",
+    "trailingEps", "forwardEps",
 ]
 
 
@@ -105,5 +106,6 @@ def demo_data(n: int = 60, years: int = 6, seed: int = 7):
         "dividendYield": rng.uniform(0, 3, n), "beta": rng.uniform(0.5, 2, n),
         "earningsTimestamp": (days[-1] + pd.to_timedelta(rng.integers(1, 90, n), "D")).astype("int64") // 10**9,
         "earningsTimestampStart": np.nan,
+        "trailingEps": rng.normal(5, 2, n), "forwardEps": rng.normal(5.5, 2, n),
     }, index=tickers)
     return universe, close, volume, bench, fund

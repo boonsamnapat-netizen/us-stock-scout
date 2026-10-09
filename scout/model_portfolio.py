@@ -36,7 +36,18 @@ def save(doc: dict, path: str) -> None:
     Path(path).write_text(json.dumps(doc, indent=1, ensure_ascii=False, default=str))
 
 
-def update(close: pd.DataFrame, spy: pd.Series, cfg: dict, path: str) -> dict:
+def fundamental_filter(fund: pd.DataFrame, tickers) -> pd.Series:
+    """Portfolio F entry filter (pre-registered, forward test only — not backtestable):
+    profitable TTM, latest quarter earnings & revenue up YoY, analysts expect EPS growth.
+    Missing data -> not eligible."""
+    f = fund.reindex(tickers)
+    ok = ((f["profitMargins"] > 0) & (f["earningsQuarterlyGrowth"] > 0) & (f["revenueGrowth"] > 0)
+          & (f["forwardEps"] > f["trailingEps"]))
+    return ok.fillna(False)
+
+
+def update(close: pd.DataFrame, spy: pd.Series, cfg: dict, path: str,
+           eligible: pd.Series | None = None) -> dict:
     """Run today's rules once per closing date (idempotent on re-runs). Returns a view dict."""
     rules = rules_from_cfg(cfg)
     rank, vol, up = signals(close, spy, rules)
@@ -49,7 +60,8 @@ def update(close: pd.DataFrame, spy: pd.Series, cfg: dict, path: str) -> dict:
     state = doc["state"]
     today_trades = []
     if doc["last_date"] != str(asof.date()):
-        today_trades = decide_day(state, asof, rank.iloc[-1], price, vol.iloc[-1], bool(up.iloc[-1]), rules)
+        today_trades = decide_day(state, asof, rank.iloc[-1], price, vol.iloc[-1], bool(up.iloc[-1]), rules,
+                                  eligible=eligible)
         for t in today_trades:
             doc["trades"].append({**t, "date": str(asof.date()), "price": float(t["price"]),
                                   **({"weight": float(t["weight"])} if "weight" in t else {})})
@@ -63,7 +75,8 @@ def update(close: pd.DataFrame, spy: pd.Series, cfg: dict, path: str) -> dict:
     # waiting list: best-ranked buyable names not held
     r = rank.iloc[-1]
     queue = [t for t in r[r <= rules.entry_pct].sort_values().index
-             if t not in state["units"] and not (vol.iloc[-1].get(t, np.nan) > rules.max_vol)][:3]
+             if t not in state["units"] and not (vol.iloc[-1].get(t, np.nan) > rules.max_vol)
+             and (eligible is None or bool(eligible.get(t, False)))][:3]
     return {"doc": doc, "rules": rules, "asof": asof, "price": price, "up": bool(up.iloc[-1]),
             "today": today_trades, "queue": queue, "rank": r}
 
@@ -105,3 +118,17 @@ def message(view: dict, scores: pd.DataFrame, spy: pd.Series) -> str:
     lines += ["", "<i>กติกา: ซื้อหุ้นคะแนนโมเมนตัม 10% บน (ผันผวน ≤60%/ปี) · ขายเมื่อหลุด 30% บนหรือหลุดเส้น 200 วัน · "
                   "ตลาดขาลงถือเงินสด · ไม่ใช่คำแนะนำการลงทุน</i>"]
     return "\n".join(lines)
+
+
+def compare_line(main: dict, other: dict, spy: pd.Series) -> str:
+    """One-line forward-test comparison: E3 (traded) vs F (paper) vs SPY, each since its own start."""
+    def ret(v):
+        d = v["doc"]
+        return value_of(d["state"], v["price"]) / START_VALUE - 1, spy.iloc[-1] / d["spy_start"] - 1
+    e, _ = ret(main)
+    f, s_f = ret(other)
+    held = ", ".join(escape(t) for t in other["doc"]["state"]["units"]) or "เงินสด"
+    acts = "".join(f" · {'🟢' if t['side'] == 'buy' else '🔴'}{escape(t['ticker'])}" for t in other["today"])
+    return (f"🧪 <b>พอร์ตทดลอง F</b> (โมเมนตัม+งบ+ประมาณการ, เริ่ม {other['doc']['started']}): "
+            f"<b>{f * 100:+.1f}%</b> · E3 {e * 100:+.1f}% · SPY {s_f * 100:+.1f}%\n"
+            f"   ถือ: {held}{acts} <i>(ไม่ต้องซื้อตาม — ใช้เทียบผลเท่านั้น)</i>")
