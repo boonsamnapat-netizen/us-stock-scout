@@ -228,3 +228,66 @@ def test_portfolio_f_only_buys_eligible(tmp_path):
     v_e = mp.update(close, spy, {"model_portfolio": {"max_vol": 0.9}}, str(tmp_path / "e.json"))
     line = mp.compare_line(v_e, v, spy)
     assert "พอร์ตทดลอง F" in line and _html_balanced(line)
+
+
+def _series_close(paths: dict) -> pd.DataFrame:
+    n = len(next(iter(paths.values())))
+    idx = pd.bdate_range(end="2026-10-08", periods=n)
+    return pd.DataFrame(paths, index=idx)
+
+
+def test_stage_detection_breakout_and_pullback():
+    import numpy as np
+    from scout import stages
+    n = 520
+    t = np.arange(n)
+    # A: slow uptrend, then a flat 6-month base, then a breakout in the last few days
+    a = np.concatenate([100 * 1.002 ** t[:350], np.full(165, 100 * 1.002 ** 349), 100 * 1.002 ** 349 * np.array([1.03, 1.05, 1.06, 1.06, 1.07])])
+    # B: strong uptrend then a ~15% pullback
+    b = np.concatenate([100 * 1.003 ** t[:500], 100 * 1.003 ** 499 * np.linspace(1, 0.85, 20)])
+    # C: downtrend
+    c = 100 * 0.998 ** t
+    close = _series_close({"A": a, "B": b, "C": c})
+    st = stages.stage_today(stages.stage_panels(close))
+    assert st["A"] == "breakout"
+    assert st["B"] == "pullback"
+    assert st["C"] == "none"
+
+
+def test_scout_classify_and_alerts():
+    from scout import estimates, scout_report as sr
+    import numpy as np
+    tick = ["GOOD", "EMRG", "BAD"]
+    fund = pd.DataFrame({
+        "profitMargins": [0.2, -0.1, 0.1], "revenueGrowth": [0.15, 0.40, -0.05],
+        "operatingMargins": [0.25, -0.05, 0.05], "returnOnEquity": [0.3, -0.2, 0.05],
+        "sector": ["Tech"] * 3, "industry": ["Software"] * 3, "longName": tick,
+        "forwardPE": [25, -50, 12], "targetMeanPrice": [110, 50, 40],
+        "earningsTimestamp": [np.nan] * 3, "earningsTimestampStart": [np.nan] * 3,
+    }, index=tick)
+    est = pd.DataFrame({
+        "eps_g_cy": [0.2, 0.5, -0.1], "eps_g_ny": [0.18, 0.9, -0.05], "rev_g_cy": [0.12, 0.4, -0.02],
+        "rev_g_ny": [0.10, 0.35, -0.01], "eps_rev_30": [0.01, 0.02, -0.03], "eps_rev_90": [0.05, 0.1, -0.08],
+        "up30": [5, 3, 0], "down30": [1, 0, 4], "n_analysts": [20, 10, 8], "eps_ny": [5, 0.3, 1],
+        "ni_q0": [1e9, -1e8, 1e8], "ni_q4": [8e8, -3e8, 2e8], "ni_ttm": [4e9, -5e8, 5e8],
+    }, index=tick)
+    cls = sr.classify(fund, est, tick)
+    assert cls.loc["GOOD", "good"] and not cls.loc["GOOD", "emerging"]
+    assert cls.loc["EMRG", "emerging"] and not cls.loc["EMRG", "good"]
+    assert not cls.loc["BAD", "good"] and not cls.loc["BAD", "emerging"]
+    close = _series_close({t: np.linspace(50, 100, 300) for t in tick})
+    stage = pd.Series({"GOOD": "breakout", "EMRG": "pullback", "BAD": "breakout"})
+    dd = pd.Series({"GOOD": 0.0, "EMRG": -0.15, "BAD": 0.0})
+    msg = sr.daily_alerts(close.index[-1], cls, fund, est, stage, {}, dd, close)
+    assert "GOOD" in msg["text"] and "EMRG" in msg["text"] and "BAD" not in msg["text"]
+    assert _html_balanced(msg["text"])
+    # same stages as yesterday -> no alert
+    assert sr.daily_alerts(close.index[-1], cls, fund, est, stage, stage.to_dict(), dd, close) is None
+    c = sr.card("GOOD", cls, fund, est, stage, dd, close, pd.Series({"Tech": 20.0}))
+    assert _html_balanced(c["text"])
+
+
+def test_scout_main_demo(tmp_path):
+    import scout_main
+    assert scout_main.main(["--demo", "--mode", "weekly", "--out", str(tmp_path)]) == 0
+    assert scout_main.main(["--demo", "--mode", "daily", "--out", str(tmp_path)]) == 0

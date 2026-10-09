@@ -24,6 +24,16 @@ Decision-support only; no profit guarantee — always quote honest, net-of-fees 
   "what to do today". Owner: drawdown tolerance ≤ −25%, Dime free package = 5 trades/month.
   Real Dime FX/fee cost NOT known (owner confirmed 2026-10-09: keep 0.10%/side assumption).
 
+## Stock Scout (current product, 2026-10-09)
+- `scout_main.py` + `scout/{estimates,stages,scout_report}.py`, workflow `scout.yml` (weekday 23:15 UTC):
+  Friday close → weekly report (🔥 groups, 🚀 good+breakout, 🔄 good+pullback, 🌱 emerging, heatmap,
+  cards); other days → alert only when a watchlist stock newly enters 🚀/🔄 (state `data/scout_state.json`).
+- "Good" = profitable TTM + next-year EPS & revenue growth expected + estimates not cut.
+  "🌱 Emerging" (owner asked Claude to decide): unprofitable but revenue ≥ +25% YoY, losses narrowing,
+  analysts expect profit next year — always flagged high risk.
+- Analyst estimates come from yfinance (earnings_estimate, revenue_estimate, eps_trend, eps_revisions,
+  quarterly_income_stmt) — today only, not backtestable. Chart stages are backtested in `research_stages.py`.
+
 ## Design notes
 - `portfolio_bt.decide_day` is the single rule engine for BOTH backtest and live portfolio
   (test asserts live day-by-day == simulate). Change rules only there + config `model_portfolio`.
