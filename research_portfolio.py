@@ -22,11 +22,40 @@ VARIANTS = [
 ]
 
 
+def fundamental_runs(close, score, demo: bool):
+    """Pre-registered variants (fixed before seeing results): E3 vs F1/F2/F3."""
+    import numpy as np
+    if demo:
+        rng = np.random.default_rng(1)
+        shape = close.shape
+        p = {"ni_ttm": pd.DataFrame(rng.normal(1, 1, shape), close.index, close.columns),
+             "ni_yoy": pd.DataFrame(rng.normal(0.1, 0.3, shape), close.index, close.columns),
+             "rev_yoy": pd.DataFrame(rng.normal(0.05, 0.1, shape), close.index, close.columns)}
+    else:
+        from scout import fundamentals as fu
+        p = fu.panels(fu.fetch_all(list(close.columns)), close.index)
+        cov = p["ni_ttm"].notna().sum(axis=1) / close.notna().sum(axis=1)
+        print("EDGAR coverage (share of priced stocks with fresh fundamentals), yearly mean:")
+        print(cov.resample("YE").mean().map(lambda v: f"{v:.0%}").to_string())
+    profitable = p["ni_ttm"] > 0
+    growing = profitable & (p["ni_yoy"] > 0) & (p["rev_yoy"] > 0)
+    fund_rank = (p["ni_yoy"].rank(axis=1, pct=True) + p["rev_yoy"].rank(axis=1, pct=True)) / 2
+    combo = (0.5 * score + 0.5 * fund_rank).where(profitable)
+    E3 = dict(check="daily", gate="cash", max_vol=0.60)
+    return [
+        (Rules("E3  momentum only (live rules)", **E3), score, None),
+        (Rules("F1  E3 + must be profitable (TTM)", **E3), score, profitable),
+        (Rules("F2  F1 + NI & revenue growing YoY", **E3), score, growing),
+        (Rules("F3  50% momentum + 50% growth, profitable", **E3), combo, None),
+    ]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--years", type=int, default=11)
     ap.add_argument("--demo", action="store_true")
     ap.add_argument("--fee", type=float, default=0.10)
+    ap.add_argument("--fundamentals", action="store_true", help="add SEC EDGAR variants F1-F3")
     a = ap.parse_args()
     if a.demo:
         u, close, _, bench, _ = data.demo_data(n=120, years=8)
@@ -41,10 +70,13 @@ def main():
 
     score = score_panel(close)
     sectors = u.set_index("ticker")["sector"].fillna("Unknown") if "sector" in u else None
+    runs = [(r, score, None) for r in VARIANTS]
+    if a.fundamentals:
+        runs = fundamental_runs(close, score, a.demo)
     rows = []
-    for r in VARIANTS:
+    for r, sc, elig in runs:
         r.fee_per_side_pct = a.fee
-        res = simulate(close, spy, r, score=score, sectors=sectors)
+        res = simulate(close, spy, r, score=sc, sectors=sectors, eligible=elig)
         rows.append({"rules": r.name, **res["stats"]})
         res["trades"].to_csv(Path("output") / f"trades_{r.name.split()[0]}.csv", index=False)
     df = pd.DataFrame(rows).set_index("rules")

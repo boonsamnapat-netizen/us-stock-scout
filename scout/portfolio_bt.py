@@ -53,7 +53,8 @@ def value_of(state: dict, price: pd.Series) -> float:
 
 
 def decide_day(state: dict, date: pd.Timestamp, rank: pd.Series, price: pd.Series, vol: pd.Series,
-               up: bool, rules: Rules, sectors: pd.Series | None = None) -> list[dict]:
+               up: bool, rules: Rules, sectors: pd.Series | None = None,
+               eligible: pd.Series | None = None) -> list[dict]:
     """Apply the rules for one check day. Mutates `state`; returns the trades made.
     Shared by the backtest and the live model portfolio so both follow identical rules.
     rank: 0 = best (pct), NaN = below 200-day SMA / no score."""
@@ -104,6 +105,8 @@ def decide_day(state: dict, date: pd.Timestamp, rank: pd.Series, price: pd.Serie
             p = price.get(t, np.nan)
             if t in units or np.isnan(p):
                 continue
+            if eligible is not None and not bool(eligible.get(t, False)):
+                continue
             if rules.max_vol and vol.get(t, np.nan) > rules.max_vol:
                 continue
             if rules.max_per_sector and sectors is not None:
@@ -132,7 +135,8 @@ def signals(close: pd.DataFrame, bench: pd.Series, rules: Rules):
 
 
 def simulate(close: pd.DataFrame, bench: pd.Series, rules: Rules, start: int = 273,
-             score: pd.DataFrame | None = None, sectors: pd.Series | None = None) -> dict:
+             score: pd.DataFrame | None = None, sectors: pd.Series | None = None,
+             eligible: pd.DataFrame | None = None) -> dict:
     if score is None:
         rank, vol, up = signals(close, bench, rules)
     else:
@@ -155,7 +159,9 @@ def simulate(close: pd.DataFrame, bench: pd.Series, rules: Rules, start: int = 2
     for i in range(start, len(dates)):
         price = close.iloc[i]
         if is_check(i):
-            log += decide_day(state, dates[i], rank.iloc[i], price, vol.iloc[i], bool(up.iloc[i]), rules, sectors)
+            elig = eligible.iloc[i] if eligible is not None else None
+            log += decide_day(state, dates[i], rank.iloc[i], price, vol.iloc[i], bool(up.iloc[i]), rules,
+                              sectors, elig)
         equity.append(value_of(state, price))
 
     eq = pd.Series(equity, index=dates[start:])

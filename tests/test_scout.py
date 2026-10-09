@@ -170,3 +170,41 @@ def test_sector_cap():
     decide_day(st, pd.Timestamp("2026-10-08"), rank, price, vol, True,
                Rules(max_per_sector=2, entry_pct=1.0, max_vol=0.6), sectors)
     assert set(st["units"]) == {"A1", "A2", "B1", "C1"}      # A3 skipped: 3rd Energy name
+
+
+def _facts(rows):
+    return {"facts": {"us-gaap": {"NetIncomeLoss": {"units": {"USD": rows}}}}}
+
+
+def _r(start, end, val, filed, form="10-Q"):
+    return {"start": start, "end": end, "val": val, "filed": filed, "form": form}
+
+
+def test_edgar_quarterly_q4_and_restatements():
+    from scout import fundamentals as fu
+    rows = [
+        _r("2024-01-01", "2024-03-31", 10, "2024-05-01"),
+        _r("2024-01-01", "2024-03-31", 99, "2024-08-01"),          # restated later -> ignored
+        _r("2024-04-01", "2024-06-30", 20, "2024-08-01"),
+        _r("2024-07-01", "2024-09-30", 30, "2024-11-01"),
+        _r("2024-01-01", "2024-12-31", 100, "2025-02-20", "10-K"),  # Q4 = 100-60 = 40
+    ]
+    q = fu.quarterly(_facts(rows), "NetIncomeLoss")
+    assert list(q["val"]) == [10, 20, 30, 40]
+    assert q["avail"].iloc[0] == pd.Timestamp("2024-05-01")
+    assert q["avail"].iloc[3] == pd.Timestamp("2025-02-20")
+
+
+def test_edgar_panel_has_no_lookahead():
+    from scout import fundamentals as fu
+    rows = [_r(f"{y}-{m:02d}-01", e, v, f) for y, m, e, v, f in [
+        (2023, 1, "2023-03-31", 10, "2023-05-01"), (2023, 4, "2023-06-30", 10, "2023-08-01"),
+        (2023, 7, "2023-09-30", 10, "2023-11-01"), (2023, 10, "2023-12-31", 10, "2024-02-15"),
+        (2024, 1, "2024-03-31", 15, "2024-05-01")]]
+    s = fu.signals_for(fu.quarterly(_facts(rows), "NetIncomeLoss"))
+    dates = pd.bdate_range("2024-04-25", "2024-05-10")
+    panel = fu.to_panel({"X": s}, "yoy", dates)["X"]
+    assert panel.loc["2024-05-01"] != 0.5           # filed that day -> usable only the next day
+    assert abs(panel.loc["2024-05-02"] - 0.5) < 1e-9   # Q1'24 vs Q1'23: 15 vs 10 = +50%
+    ttm = fu.to_panel({"X": s}, "ttm", dates)["X"]
+    assert ttm.loc["2024-05-02"] == 45                 # 10+10+10+15
