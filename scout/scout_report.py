@@ -45,7 +45,8 @@ def classify(fund: pd.DataFrame, est: pd.DataFrame, tickers, good_top_pct: float
     profitable = ttm > 0
     not_cut = ~(e["eps_rev_90"] < -0.02)                       # estimates not being cut
     good = (profitable & (e["eps_g_ny"] > 0) & ((e["rev_g_ny"] > 0) | (f["revenueGrowth"] > 0)) & not_cut)
-    emerging = (~profitable & (f["revenueGrowth"] >= 0.25) & (e["ni_q0"] > e["ni_q4"]) & (e["eps_ny"] > 0))
+    emerging = (~profitable & (f["revenueGrowth"] >= 0.25) & (e["ni_q0"] > e["ni_q4"]) & (e["eps_ny"] > 0)
+                & not_cut)                                            # estimates must not be being cut
 
     sector = f["sector"].fillna("Unknown")
     parts = {

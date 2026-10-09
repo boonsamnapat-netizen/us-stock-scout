@@ -279,6 +279,9 @@ def test_scout_classify_and_alerts():
     assert cls.loc["GOOD", "good"] and not cls.loc["GOOD", "emerging"]
     assert cls.loc["EMRG", "emerging"] and not cls.loc["EMRG", "good"]
     assert not cls.loc["BAD", "good"] and not cls.loc["BAD", "emerging"]
+    est2 = est.copy()
+    est2.loc["EMRG", "eps_rev_90"] = -0.23                       # estimates being cut -> not emerging
+    assert not sr.classify(fund, est2, tick).loc["EMRG", "emerging"]
     close = _series_close({t: np.linspace(50, 100, 300) for t in tick})
     stage = pd.Series({"GOOD": "pullback", "EMRG": "pullback", "BAD": "pullback"})
     dd = pd.Series({"GOOD": 0.0, "EMRG": -0.15, "BAD": 0.0})
