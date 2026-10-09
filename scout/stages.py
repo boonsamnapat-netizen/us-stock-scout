@@ -1,6 +1,6 @@
 """Chart stages (price/volume only -> backtestable) and industry-group strength.
 
-🚀 breakout   "เพิ่งเริ่มวิ่ง": within the last 10 days the close broke above its prior 6-month high,
+breakout (not shown as a buy section — underperformed in research_stages): within the last 10 days the close broke above its prior 6-month high,
               after a base (prior 6-month range <= 40%), 200-day SMA not falling, volume picking up,
               and price not yet extended (< 10% above the breakout level).
 🔄 pullback   "ย่อในขาขึ้น": long-term uptrend intact (close > rising 200-day SMA, 50-day > 200-day)

@@ -26,7 +26,9 @@ Decision-support only; no profit guarantee — always quote honest, net-of-fees 
 
 ## Stock Scout (current product, 2026-10-09)
 - `scout_main.py` + `scout/{estimates,stages,scout_report}.py`, workflow `scout.yml` (weekday 23:15 UTC):
-  Friday-UTC run → weekly report; other days → alerts (state `data/scout_state.json`, cached watchlist).
+  First run seeing a week's final bar → weekly report (once per ISO week, `weekly_week`); other runs →
+  alerts from the cached watchlist (state `data/scout_state.json`); watchlist not overwritten if estimate
+  coverage < 70%.
 - 2026-10-09 (owner approved): NO 🚀 breakout section — research_stages (1,518 stocks, vs equal-weight
   universe, costs, NW t) showed breakouts underperform (12m −7…−9%, t≈−2), pullbacks ≈ noise (+0.7%)
   but beat chasing uptrends (~+7%). Weekly = 🔥 groups, 🔄 good+pullback, ✅ top good, 🌱 emerging;

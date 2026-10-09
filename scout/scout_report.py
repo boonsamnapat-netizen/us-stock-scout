@@ -1,7 +1,7 @@
 """Stock Scout: good fundamentals + 1–3y outlook + chart timing + emerging industry groups.
 
-Owner's goal (2026-10-09): find stocks with good fundamentals and a future 1–3 years out that are
-just starting to run, or pulling back inside an uptrend, or in an industry that is heating up.
+Owner's goal (2026-10-09): find stocks with good fundamentals and a future 1–3 years out, pullbacks
+inside an uptrend, and industries heating up. (Breakout section removed after backtest — see STAGE notes.)
 The owner decides trades; this is a watchlist, not buy signals.
 """
 from __future__ import annotations
@@ -16,12 +16,13 @@ import pandas as pd
 from .brief import SECTOR_SHORT, thdate
 from .report import next_earnings
 
-STAGE_TH = {"breakout": "📈 ทำจุดสูงใหม่", "pullback": "🔄 ย่อในขาขึ้น", "uptrend": "📈 ขาขึ้น", "none": "–"}
+STAGE_TH = {"breakout": "⬆️ ทำจุดสูงใหม่", "pullback": "🔄 ย่อในขาขึ้น", "uptrend": "📈 ขาขึ้น", "none": "–"}
 # Backtest 2015–2026 (research_stages.py, vs equal-weight universe, costs, next-day entry):
 # breakouts UNDERPERFORMED (12m ≈ −7…−9%, t≈−2); pullbacks ≈ +0.7% (t≈0.3, noise) but ≈ +7% vs chasing
 # uptrends. So no 🚀 buy section; 🔄 is shown as "not chasing", not as a proven edge.
 HONESTY = ("<i>จังหวะกราฟ: ทดสอบย้อนหลัง 2015–26 แล้ว 'ไม่ชนะหุ้นเฉลี่ยอย่างมีนัย' "
-           "(🔄 ย่อ ≈ เท่าหุ้นเฉลี่ย แต่ดีกว่าไล่ซื้อตอนวิ่งแรง) · พื้นฐาน/ประมาณการ: ทดสอบย้อนหลังไม่ได้</i>")
+           "(🔄 ย่อ ≈ เท่าหุ้นเฉลี่ย · ในอดีตดีกว่ากลุ่มที่วิ่งใกล้จุดสูงสุด แต่ยังไม่ได้ทดสอบนัยสำคัญ) · "
+           "พื้นฐาน/ประมาณการ: ทดสอบย้อนหลังไม่ได้</i>")
 
 
 def _ok(x) -> bool:
@@ -98,7 +99,7 @@ def warn_icons(t, fund, vol, today) -> str:
 def line(t, cls, fund, est, stage, dd, vol, today) -> str:
     hs = highlights(t, cls, fund, est)
     note = {"breakout": "ทำจุดสูงใหม่ (ระวังไล่ราคา)", "pullback": f"ย่อ {abs(dd.get(t, 0)) * 100:.0f}% จากจุดสูงสุด",
-            "uptrend": "ขาขึ้น ใกล้จุดสูงสุด"}.get(stage.get(t), "")
+            "uptrend": "ขาขึ้น ใกล้จุดสูงสุด", "none": "ยังไม่มีขาขึ้น"}.get(stage.get(t), "")
     txt = " · ".join(hs + ([note] if note else []))
     ic = warn_icons(t, fund, vol, today)
     mc = fund.loc[t].get("marketCap") if t in fund.index else None
@@ -107,7 +108,7 @@ def line(t, cls, fund, est, stage, dd, vol, today) -> str:
 
 
 # ------------------------------------------------------------------ messages
-def weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, n=8) -> list[dict]:
+def weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, n=8, new=frozenset()):
     today = pd.Timestamp(datetime.now(timezone.utc).date())
     vol = close.pct_change().iloc[-60:].std() * np.sqrt(252)
     up = spy.iloc[-1] > spy.rolling(200).mean().iloc[-1]
@@ -127,17 +128,20 @@ def weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, n=8) -
                        f"แข็งแรง {g['breadth'] * 100:.0f}% ของ {int(g['n'])} ตัว"
                        + (f"\n   เด่น: {', '.join(escape(m) for m in members)}" if members else ""))
 
-    def section(title, mask, limit):
-        picks = cls[mask].sort_values("fscore", ascending=False).head(limit).index.tolist()
+    def section(title, mask, limit, always=()):
+        ranked = cls[mask].sort_values("fscore", ascending=False).index.tolist()
+        picks = ranked[:limit] + [t for t in ranked[limit:] if t in always]     # never hide 🆕 names
         lines = ["", f"<b>{title}</b>"]
-        lines += [line(t, cls, fund, est, stage, dd, vol, today) for t in picks] or ["– ไม่มีสัปดาห์นี้"]
+        lines += [line(t, cls, fund, est, stage, dd, vol, today) + (" 🆕" if t in new else "")
+                  + (" 🌱" if cls.loc[t, "emerging"] else "") for t in picks] or ["– ไม่มีสัปดาห์นี้"]
         return lines, picks
 
-    s1, p1 = section("🔄 พื้นฐานดี + กำลังย่อในขาขึ้น (ไม่ต้องไล่ราคา)", cls["good"] & (stage == "pullback"), n)
+    s1, p1 = section("🔄 พื้นฐานดี + กำลังย่อในขาขึ้น", cls["good"] & (stage.reindex(cls.index) == "pullback"), n,
+                     always=new)
     rest = cls["good"] & ~cls.index.isin(p1)
-    s2, p2 = section("✅ พื้นฐาน + อนาคตดีที่สุด (จังหวะไหนก็ได้)", rest, n)
+    s2, p2 = section("✅ พื้นฐาน + ประมาณการดีที่สุด (ไม่ดูจังหวะกราฟ)", rest, n)
     s3, p3 = section("🌱 กำลังจะกำไร ⚠️เสี่ยงสูง (รายได้โตแรง ขาดทุนลดลง)", cls["emerging"], 5)
-    foot = ["", "📅 งบออกใน 2 สัปดาห์ · 🎢 ผันผวนสูง · (เล็ก) มูลค่าบริษัท < $3B สภาพคล่องต่ำกว่า",
+    foot = ["", "🆕 เพิ่งเข้าโซนย่อสัปดาห์นี้ · 📅 งบออกใน 2 สัปดาห์ · 🎢 ผันผวนสูง · (เล็ก) มูลค่าบริษัท < $3B",
             HONESTY,
             "<i>รายชื่อให้ศึกษาต่อ ไม่ใช่คำแนะนำซื้อ · ข้อมูล Yahoo Finance · ประมาณการนักวิเคราะห์อาจผิด</i>"]
     msgs = [{"text": "\n".join(head + g_lines)}, {"text": "\n".join(s1 + s2 + s3 + foot).strip()}]
@@ -159,7 +163,7 @@ def card(t, cls, fund, est, stage, dd, close, sec_pe) -> dict:
         f"• กำไรต่อหุ้น: ปีนี้ {pct(e['eps_g_cy'])} · ปีหน้า {pct(e['eps_g_ny'])}",
         f"• รายได้: ปีนี้ {pct(e['rev_g_cy'])} · ปีหน้า {pct(e['rev_g_ny'])}",
         f"• ประมาณการปีหน้าเปลี่ยนใน 90 วัน: {pct(e['eps_rev_90'], 1)} · 30 วัน ปรับขึ้น {e['up30']:.0f} / ลง {e['down30']:.0f} คน"
-        if _ok(e["up30"]) else f"• ประมาณการปีหน้าเปลี่ยนใน 90 วัน: {pct(e['eps_rev_90'], 1)}",
+        if _ok(e["up30"]) and _ok(e["down30"]) else f"• ประมาณการปีหน้าเปลี่ยนใน 90 วัน: {pct(e['eps_rev_90'], 1)}",
         "",
         "<b>ผลงานจริงล่าสุด</b>",
         f"• รายได้ไตรมาสล่าสุด {pct(f.get('revenueGrowth'))} เทียบปีก่อน",
@@ -169,7 +173,8 @@ def card(t, cls, fund, est, stage, dd, close, sec_pe) -> dict:
         "",
         f"<b>ราคา</b> · ห่างจุดสูงสุด 1 ปี {pct(dd.get(t))} · Fwd P/E {f.get('forwardPE'):.1f}"
         + (f" (กลุ่ม {sec_pe.get(f.get('sector')):.1f})" if _ok(sec_pe.get(f.get('sector'))) else "")
-        if _ok(f.get("forwardPE")) else f"<b>ราคา</b> · ห่างจุดสูงสุด 1 ปี {pct(dd.get(t))}",
+        if _ok(f.get("forwardPE")) and f.get("forwardPE") > 0
+        else f"<b>ราคา</b> · ห่างจุดสูงสุด 1 ปี {pct(dd.get(t))} · Fwd P/E – (คาดว่าขาดทุน)",
     ]
     if _ok(tgt):
         lines.append(f"🎯 เป้านักวิเคราะห์เฉลี่ย ${tgt:,.0f} ({pct(tgt / p.iloc[-1] - 1)})")
@@ -193,7 +198,7 @@ def daily_alerts(asof, cls, fund, est, stage, prev_stage: dict, dd, close,
     if not new:
         return None
     new = sorted(new, key=lambda t: -(cls.loc[t, "fscore"] if _ok(cls.loc[t, "fscore"]) else 0))[:10]
-    lines = [f"<b>🔔 Scout · {thdate(asof)} — หุ้นพื้นฐานดีเพิ่งย่อเข้าโซน 🔄</b>", ""]
+    lines = [f"<b>🔔 Scout · {thdate(asof)} — หุ้นในรายชื่อเฝ้าดูเพิ่งย่อเข้าโซน 🔄</b>", ""]
     for kind in ("pullback",):
         ts = [t for t in new if stage.get(t) == kind]
         if ts:

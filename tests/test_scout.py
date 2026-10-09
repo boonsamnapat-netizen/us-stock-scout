@@ -296,9 +296,16 @@ def test_scout_classify_and_alerts():
 
 
 def test_scout_main_demo(tmp_path):
+    import json
     import scout_main
     assert scout_main.main(["--demo", "--mode", "weekly", "--out", str(tmp_path)]) == 0
+    st = json.loads((tmp_path / "scout_state_test.json").read_text())
+    assert st["watch"] and st["weekly_week"]
+    # cached-watchlist daily path (no full fetch), twice
     assert scout_main.main(["--demo", "--mode", "daily", "--out", str(tmp_path)]) == 0
+    assert scout_main.main(["--demo", "--mode", "daily", "--out", str(tmp_path)]) == 0
+    st2 = json.loads((tmp_path / "scout_state_test.json").read_text())
+    assert st2["watch"] == st["watch"]
 
 
 

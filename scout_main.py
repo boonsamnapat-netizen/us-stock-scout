@@ -39,12 +39,6 @@ def main(argv=None) -> int:
 
     state_path = BASE / STATE_FILE if not (a.demo or a.limit) else out / "scout_state_test.json"
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
-    # weekly = the Friday-UTC run (Saturday morning TH), so a Friday holiday still gets a report
-    mode = a.mode if a.mode != "auto" else ("weekly" if datetime.now(timezone.utc).weekday() == 4 else "daily")
-    if mode == "daily" and not state.get("watch"):
-        print("[scout] no cached watchlist yet -> running a full (weekly-style) classification")
-    full = a.demo or mode == "weekly" or not state.get("watch")
-
     if a.demo:
         universe, close, volume, bench, fund = data.demo_data(n=120, years=3)
         fund["industry"] = [f"Industry {i % 15}" for i in range(len(fund))]
@@ -66,6 +60,17 @@ def main(argv=None) -> int:
         print(f"[scout] prices ok ({close.shape[1]} tickers, last {close.index[-1].date()})")
 
     asof = close.index[-1]
+    # weekly = first run that sees a week's final bar (Friday close, or Thursday if Friday is a holiday
+    # and the run date is already Fri/Sat UTC); once per ISO week. Robust to late cron starts.
+    week = f"{asof.isocalendar().year}-W{asof.isocalendar().week:02d}"
+    last_bar_of_week = asof.weekday() == 4 or (asof.weekday() == 3 and datetime.now(timezone.utc).weekday() in (4, 5))
+    if a.mode != "auto":
+        mode = a.mode
+    else:
+        mode = "weekly" if last_bar_of_week and state.get("weekly_week") != week else "daily"
+    if mode == "daily" and not state.get("watch"):
+        print("[scout] no cached watchlist yet -> running a full classification")
+    full = mode == "weekly" or not state.get("watch")
     panels = stages.stage_panels(close, volume)
     stage = stages.stage_today(panels)
     dd = panels["dd"].iloc[-1]
@@ -82,20 +87,32 @@ def main(argv=None) -> int:
             est = estimates.fetch(list(close.columns))
         cls = sr.classify(fund, est, close.columns, good_top)
         watch = cls[cls["good"] | cls["emerging"]]
-        state["watch"] = json.loads(watch.to_json(orient="index"))
-        state["watch_date"] = str(asof.date())
+        coverage = est["eps_g_ny"].reindex(close.columns).notna().mean()
+        print(f"[scout] estimate coverage {coverage:.0%} · watchlist {len(watch)}")
+        if coverage >= 0.70 or not state.get("watch"):
+            state["watch"] = json.loads(watch.to_json(orient="index"))
+            state["watch_date"] = str(asof.date())
+        else:
+            print("[scout] coverage too low (Yahoo rate limit?) -> keeping the previous watchlist")
     else:
         cls = pd.DataFrame.from_dict(state["watch"], orient="index")
         cls[["good", "emerging"]] = cls[["good", "emerging"]].astype(bool)
         cand = [t for t in cls.index if stage.get(t) == "pullback" and prev.get(t) != stage.get(t)]
         print(f"[scout] daily: {len(cand)} watchlist stock(s) changed stage -> fetching their data")
-        fund = data.fetch_fundamentals(cand) if cand else pd.DataFrame(columns=data.INFO_FIELDS)
-        est = estimates.fetch(cand) if cand else pd.DataFrame(columns=estimates.FIELDS)
+        if a.demo:
+            fund, est = fund.reindex(cand), est.reindex(cand)
+        else:
+            fund = data.fetch_fundamentals(cand) if cand else pd.DataFrame(columns=data.INFO_FIELDS)
+            est = estimates.fetch(cand) if cand else pd.DataFrame(columns=estimates.FIELDS)
         cls = cls.loc[cand] if cand else cls.iloc[0:0]
 
     if mode == "weekly":
         groups = stages.group_strength(close, fund["industry"], spy)
-        msgs, tops = sr.weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe)
+        new_pb = {t for t in cls.index if stage.get(t) == "pullback" and t in prev and prev[t] != "pullback"}
+        msgs, tops = sr.weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, new=new_pb)
+        for t in new_pb:
+            last_alert[t] = {"stage": "pullback", "date": str(asof.date())}
+        state["weekly_week"] = week
         messages += msgs
         scores = pd.DataFrame({"sector": universe.set_index("ticker")["sector"].reindex(close.columns).fillna("Unknown"),
                                "mom_1m": close.iloc[-1] / close.iloc[-22] - 1})
