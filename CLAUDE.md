@@ -18,7 +18,7 @@ Decision-support only; no profit guarantee — always quote honest, net-of-fees 
 
 - Product = **model portfolio** (owner chose, Alpha-Picks style): 5 stocks, rules E3, daily Telegram
   "what to do today". Owner: drawdown tolerance ≤ −25%, Dime free package = 5 trades/month.
-  Real Dime FX/fee cost NOT known → 0.10%/side assumption.
+  Real Dime FX/fee cost NOT known (owner confirmed 2026-10-09: keep 0.10%/side assumption).
 
 ## Design notes
 - `portfolio_bt.decide_day` is the single rule engine for BOTH backtest and live portfolio
