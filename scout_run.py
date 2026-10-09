@@ -17,9 +17,11 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from scout import backtest, brief, data, heatmap, report, scoring, telegram, universe as uni
+from scout import backtest, brief, data, heatmap, model_portfolio as mp, report, scoring, telegram, universe as uni
+from scout.portfolio_bt import simulate
 
 BASE = Path(__file__).resolve().parent
+PORTFOLIO_FILE = "data/model_portfolio.json"
 
 
 def main(argv=None) -> int:
@@ -43,6 +45,8 @@ def main(argv=None) -> int:
     else:
         universe, src = uni.load_universe(cfg, str(BASE))
         tickers = universe["ticker"].tolist()
+        held = list((mp.load(str(BASE / PORTFOLIO_FILE)) or {}).get("state", {}).get("units", {}))
+        tickers += [t for t in held if t not in tickers]   # keep pricing names that left the index
         if a.limit:
             tickers = tickers[:a.limit]
             universe = universe[universe["ticker"].isin(tickers)]
@@ -75,7 +79,19 @@ def main(argv=None) -> int:
     bt["periods"].to_csv(out / f"backtest_short_{stamp}.csv", index=False)
     hm = heatmap.sector_heatmap(scores, fund, str(out / f"heatmap_{stamp}.png"), close.index[-1])
     weekly = a.weekly or close.index[-1].weekday() == 4   # Friday close -> Saturday morning TH
-    messages = brief.build(scores, fund, universe, close, bench, bt, cfg, hm, weekly)
+    spy = bench[bench_syms[0]]
+
+    # --- model portfolio (only full real runs may advance the real state file)
+    pf_path = str(BASE / PORTFOLIO_FILE) if not (a.demo or a.limit) else str(out / "model_portfolio_test.json")
+    view = mp.update(close, spy, cfg, pf_path)
+    messages = [{"text": mp.message(view, scores, spy)}]
+    if hm:
+        messages.append({"photo": hm, "caption": "🗺 แผนที่ตลาด 1 เดือน · ขนาด = มูลค่าบริษัท · เขียวขึ้น / แดงลง"})
+    buys = [t["ticker"] for t in view["today"] if t["side"] == "buy"]
+    messages += brief.cards_for(buys, "🟢 ซื้อใหม่:", scores, fund, universe, close, cfg)
+    if weekly:
+        res = simulate(close, spy, view["rules"])
+        messages.append({"text": brief.model_backtest_text(res["stats"], view["rules"])})
     (out / f"telegram_{stamp}.txt").write_text(
         "\n\n=====\n\n".join(m.get("text") or f"[photo] {m['photo']}" for m in messages), encoding="utf-8")
     for m in messages:

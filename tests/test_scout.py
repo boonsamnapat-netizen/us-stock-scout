@@ -117,3 +117,44 @@ def test_portfolio_sim_respects_caps():
         held += 1 if side == "buy" else -1
         assert 0 <= held <= 5
     assert 0.99 < res["equity"].iloc[0] <= 1.0   # day-1 buys pay fees
+
+
+def _uptrend_demo():
+    import numpy as np
+    u, close, _, bench, fund = data.demo_data(n=60, years=3, seed=3)
+    spy = pd.Series(300 * 1.0006 ** np.arange(len(close)), index=close.index)   # always above SMA200
+    return u, close, spy, fund
+
+
+def test_live_model_portfolio_matches_backtest(tmp_path):
+    from scout import model_portfolio as mp
+    from scout.portfolio_bt import simulate
+    u, close, spy, fund = _uptrend_demo()
+    cfg = {"model_portfolio": {"max_vol": 0.9}, "fees": {"per_side_pct": 0.1}}
+    rules = mp.rules_from_cfg(cfg)
+    n, k = len(close), 80
+    path = str(tmp_path / "pf.json")
+    for i in range(n - k, n):
+        mp.update(close.iloc[:i + 1], spy.iloc[:i + 1], cfg, path)
+    live = mp.load(path)
+    sim = simulate(close, spy, rules, start=n - k)
+    assert set(live["state"]["units"]) == set(sim["state"]["units"])
+    assert abs(live["state"]["cash"] - sim["state"]["cash"]) < 1e-9
+    assert len(live["trades"]) == len(sim["trades"]) > 0
+    assert len(live["history"]) == k
+
+
+def test_model_portfolio_idempotent_and_message(tmp_path):
+    from scout import model_portfolio as mp
+    u, close, spy, fund = _uptrend_demo()
+    cfg = {"model_portfolio": {"max_vol": 0.9}}
+    path = str(tmp_path / "pf.json")
+    v1 = mp.update(close, spy, cfg, path)
+    n_trades = len(mp.load(path)["trades"])
+    v2 = mp.update(close, spy, cfg, path)             # same closing date -> no new trades
+    assert len(mp.load(path)["trades"]) == n_trades
+    assert [t["ticker"] for t in v1["today"]] == [t["ticker"] for t in v2["today"]]
+    sc = scoring.score_all(close, fund, u)
+    msg = mp.message(v2, sc, spy)
+    assert "ซื้อ" in msg and _html_balanced(msg)
+    assert 1 <= len(v1["doc"]["state"]["units"]) <= 5

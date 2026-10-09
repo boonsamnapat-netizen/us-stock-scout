@@ -42,20 +42,101 @@ def score_panel(close: pd.DataFrame) -> pd.DataFrame:
     return score.where(close > sma200)
 
 
+def new_state(cash: float = 1.0) -> dict:
+    return {"cash": cash, "units": {}, "entry": {}, "month": None, "trades_this_month": 0}
+
+
+def value_of(state: dict, price: pd.Series) -> float:
+    return state["cash"] + sum(u * price.get(t, np.nan) for t, u in state["units"].items()
+                               if not np.isnan(price.get(t, np.nan)))
+
+
+def decide_day(state: dict, date: pd.Timestamp, rank: pd.Series, price: pd.Series, vol: pd.Series,
+               up: bool, rules: Rules) -> list[dict]:
+    """Apply the rules for one check day. Mutates `state`; returns the trades made.
+    Shared by the backtest and the live model portfolio so both follow identical rules.
+    rank: 0 = best (pct), NaN = below 200-day SMA / no score."""
+    fee = rules.fee_per_side_pct / 100
+    ym = f"{date.year}-{date.month:02d}"
+    if state["month"] != ym:
+        state["month"], state["trades_this_month"] = ym, 0
+    trades = []
+    units, entry = state["units"], state["entry"]
+
+    def sell(t, why):
+        p = price.get(t, np.nan)
+        if np.isnan(p):
+            return
+        state["cash"] += units.pop(t) * p * (1 - fee)
+        entry.pop(t, None)
+        state["trades_this_month"] += 1
+        trades.append({"date": date, "ticker": t, "side": "sell", "price": p, "why": why})
+
+    # 1) exits
+    forced = rules.gate == "cash" and not up
+    to_sell = []
+    for t in list(units):
+        rk = rank.get(t, np.nan)
+        if forced:
+            to_sell.append((t, "ตลาดขาลง ถือเงินสด"))
+        elif rules.replace_all:
+            if t not in set(rank.nsmallest(rules.n_hold).dropna().index):
+                to_sell.append((t, "หลุด Top"))
+        elif np.isnan(rk):
+            to_sell.append((t, "ราคาหลุดเส้น 200 วัน"))
+        elif rk > rules.exit_pct:
+            to_sell.append((t, f"หลุดกลุ่ม {rules.exit_pct:.0%} บน"))
+        elif rules.stop_loss_pct and price.get(t, np.inf) < entry[t] * (1 - rules.stop_loss_pct):
+            to_sell.append((t, "stop-loss"))
+    to_sell.sort(key=lambda x: -(rank.get(x[0], np.nan) if not np.isnan(rank.get(x[0], np.nan)) else 9))
+    for t, why in to_sell:
+        if state["trades_this_month"] >= rules.max_trades_month and not forced:
+            break
+        sell(t, why)
+
+    # 2) entries
+    if (up or rules.gate == "none") and len(units) < rules.n_hold:
+        value = value_of(state, price)
+        for t in rank[rank <= rules.entry_pct].sort_values().index:
+            if len(units) >= rules.n_hold or state["trades_this_month"] >= rules.max_trades_month:
+                break
+            p = price.get(t, np.nan)
+            if t in units or np.isnan(p):
+                continue
+            if rules.max_vol and vol.get(t, np.nan) > rules.max_vol:
+                continue
+            alloc = min(state["cash"], value * rules.invest_frac / rules.n_hold)
+            if alloc <= 0:
+                break
+            units[t] = alloc * (1 - fee) / p
+            entry[t] = p
+            state["cash"] -= alloc
+            state["trades_this_month"] += 1
+            trades.append({"date": date, "ticker": t, "side": "buy", "price": p,
+                           "why": f"อันดับ {int((rank < rank[t]).sum()) + 1}", "weight": alloc / value})
+    return trades
+
+
+def signals(close: pd.DataFrame, bench: pd.Series, rules: Rules):
+    """Daily panels used by decide_day: pct rank (0 best), 60-day vol, regime flag."""
+    rank = score_panel(close).rank(axis=1, ascending=False, pct=True)
+    vol = close.pct_change().rolling(60).std() * np.sqrt(252)
+    bench = bench.reindex(close.index).ffill()
+    up = bench > bench.rolling(rules.gate_sma, min_periods=rules.gate_sma).mean()
+    return rank, vol, up
+
+
 def simulate(close: pd.DataFrame, bench: pd.Series, rules: Rules, start: int = 273,
              score: pd.DataFrame | None = None) -> dict:
-    score = score_panel(close) if score is None else score
-    pct_rank = score.rank(axis=1, ascending=False, pct=True)   # 0 = best
+    if score is None:
+        rank, vol, up = signals(close, bench, rules)
+    else:
+        rank = score.rank(axis=1, ascending=False, pct=True)
+        vol = close.pct_change().rolling(60).std() * np.sqrt(252)
+        b = bench.reindex(close.index).ffill()
+        up = b > b.rolling(rules.gate_sma, min_periods=rules.gate_sma).mean()
     bench = bench.reindex(close.index).ffill()
-    regime_up = bench > bench.rolling(rules.gate_sma, min_periods=rules.gate_sma).mean()
-    vol60 = close.pct_change().rolling(60).std() * np.sqrt(252)
-    fee = rules.fee_per_side_pct / 100
     dates = close.index
-    px = close.to_numpy()
-
-    cash, units, entry = 1.0, {}, {}   # ticker col index -> units / entry price
-    equity, trades_log = [], []
-    month, trades_this_month = None, 0
 
     def is_check(i):
         d = dates[i]
@@ -65,70 +146,17 @@ def simulate(close: pd.DataFrame, bench: pd.Series, rules: Rules, start: int = 2
             return i + 1 >= len(dates) or dates[i + 1].isocalendar().week != d.isocalendar().week
         return i == start or dates[i - 1].month != d.month
 
-    cols = {c: j for j, c in enumerate(close.columns)}
+    state, equity, log = new_state(), [], []
     for i in range(start, len(dates)):
-        d = dates[i]
-        if d.month != month:
-            month, trades_this_month = d.month, 0
-        value = cash + sum(u * px[i, j] for j, u in units.items() if not np.isnan(px[i, j]))
+        price = close.iloc[i]
         if is_check(i):
-            rk = pct_rank.iloc[i]
-            up = bool(regime_up.iloc[i])
-
-            def sell(j):
-                nonlocal cash, trades_this_month
-                p = px[i, j]
-                if np.isnan(p):
-                    return
-                cash += units.pop(j) * p * (1 - fee)
-                entry.pop(j, None)
-                trades_this_month += 1
-                trades_log.append((d, close.columns[j], "sell"))
-
-            # 1) exits
-            held = list(units)
-            if rules.gate == "cash" and not up:
-                to_sell = held
-            elif rules.replace_all:
-                top = set(cols[t] for t in rk.nsmallest(rules.n_hold).dropna().index)
-                to_sell = [j for j in held if j not in top]
-            else:
-                to_sell = [j for j in held
-                           if not (rk.iloc[j] <= rules.exit_pct)   # NaN (below SMA200) -> sell
-                           or (rules.stop_loss_pct and px[i, j] < entry[j] * (1 - rules.stop_loss_pct))]
-                to_sell.sort(key=lambda j: -(rk.iloc[j] if not np.isnan(rk.iloc[j]) else 9))
-            for j in to_sell:
-                if trades_this_month >= rules.max_trades_month and not (rules.gate == "cash" and not up):
-                    break
-                sell(j)
-
-            # 2) entries
-            can_buy = up or rules.gate == "none"
-            if can_buy and len(units) < rules.n_hold:
-                cands = rk[rk <= rules.entry_pct].sort_values().index
-                value = cash + sum(u * px[i, j] for j, u in units.items() if not np.isnan(px[i, j]))
-                for t in cands:
-                    if len(units) >= rules.n_hold or trades_this_month >= rules.max_trades_month:
-                        break
-                    j = cols[t]
-                    if j in units or np.isnan(px[i, j]):
-                        continue
-                    if rules.max_vol and vol60.iat[i, j] > rules.max_vol:
-                        continue
-                    alloc = min(cash, value * rules.invest_frac / rules.n_hold)
-                    if alloc <= 0:
-                        break
-                    units[j] = alloc * (1 - fee) / px[i, j]
-                    entry[j] = px[i, j]
-                    cash -= alloc
-                    trades_this_month += 1
-                    trades_log.append((d, t, "buy"))
-            value = cash + sum(u * px[i, j] for j, u in units.items() if not np.isnan(px[i, j]))
-        equity.append(value)
+            log += decide_day(state, dates[i], rank.iloc[i], price, vol.iloc[i], bool(up.iloc[i]), rules)
+        equity.append(value_of(state, price))
 
     eq = pd.Series(equity, index=dates[start:])
-    return {"equity": eq, "trades": pd.DataFrame(trades_log, columns=["date", "ticker", "side"]),
-            "stats": stats(eq, bench.iloc[start:], len(trades_log))}
+    trades = pd.DataFrame(log, columns=["date", "ticker", "side", "price", "why", "weight"])
+    return {"equity": eq, "trades": trades, "state": state,
+            "stats": stats(eq, bench.iloc[start:], len(trades))}
 
 
 def _cagr(eq: pd.Series) -> float:

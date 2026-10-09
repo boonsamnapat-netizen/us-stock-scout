@@ -14,7 +14,7 @@ import pandas as pd
 
 from .backtest import stock_history
 from .report import next_earnings
-from .scoring import factor_grades, part_ranks, price_features, sector_medians, snapshot
+from .scoring import factor_grades, part_ranks, price_features, sector_medians, snapshot  # noqa: F401
 
 TH_MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
 SECTOR_SHORT = {
@@ -257,4 +257,38 @@ def backtest_text(bt: dict) -> str:
         "⚠️ ทดสอบด้วยรายชื่อหุ้นในดัชนีวันนี้ → ตัวเลขดูดีเกินจริง",
         "⚠️ ระยะกลาง/ยาวยังทดสอบย้อนหลังไม่ได้ (ไม่มีงบย้อนหลังแบบ ณ เวลานั้น)",
         "<i>* ค่าธรรมเนียมเป็นค่าสมมติ ยังไม่ใช่ของ Dime จริง</i>",
+    ])
+
+
+def cards_for(tickers: list[str], title: str, scores, fund, universe, close, cfg) -> list[dict]:
+    """Detail cards (grades, reasons, history, chart button) for the given tickers."""
+    if not tickers:
+        return []
+    today = pd.Timestamp(datetime.now(timezone.utc).date())
+    sector = universe.set_index("ticker")["sector"].reindex(scores.index).fillna("Unknown")
+    snap = snapshot(price_features(close))
+    ranks = part_ranks(snap, fund, sector, cfg.get("report", {}).get("min_analysts", 5))
+    grades = factor_grades(snap, fund, sector, close)
+    sec_pe = sector_medians(fund, sector, "forwardPE")
+    vol = close.pct_change().iloc[-252:].std() * (252 ** 0.5)
+    out = []
+    for t in tickers:
+        if t in scores.index:
+            c = card(t, title, scores, fund, close, ranks, grades, sec_pe, today, vol, "short")
+            first, rest = c["text"].split("\n", 1)
+            c["text"] = f"<b>{escape(title)} {escape(t)}</b>\n" + rest
+            out.append(c)
+    return out
+
+
+def model_backtest_text(stats: dict, rules) -> str:
+    s = stats
+    return "\n".join([
+        "<b>🧪 สรุปประจำสัปดาห์ — ถ้าใช้กติกานี้ย้อนหลัง</b>",
+        f"{s['start']:%m/%Y}–{s['end']:%m/%Y} · ถือ {rules.n_hold} ตัว · หักค่าธรรมเนียม {rules.fee_per_side_pct:.2f}%/ขา*",
+        f"• ต่อปี: พอร์ต <b>{pct(s['cagr'], 1)}</b> vs SPY {pct(s['cagr_spy'], 1)}",
+        f"• ร่วงหนักสุด: พอร์ต {pct(s['maxdd'], 1)} vs SPY {pct(s['maxdd_spy'], 1)}",
+        f"• ซื้อขายเฉลี่ย {s['trades_per_month']:.1f} ครั้ง/เดือน",
+        "⚠️ ใช้รายชื่อหุ้นในดัชนีวันนี้ทดสอบย้อนหลัง → ตัวเลขดูดีเกินจริง · ผลงานจริงดูที่ 'ตั้งแต่เริ่ม' ในข้อความทุกเช้า",
+        "<i>* ค่าธรรมเนียมเป็นค่าสมมติ (ส่วนต่างค่าเงิน) ยังไม่ใช่ตัวเลขจริงของ Dime</i>",
     ])

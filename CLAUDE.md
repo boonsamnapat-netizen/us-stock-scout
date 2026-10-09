@@ -16,7 +16,14 @@ Decision-support only; no profit guarantee — always quote honest, net-of-fees 
 - NOT yet provided: real Dime fee (config `fees.per_side_pct` is an ASSUMPTION), budget,
   risk tolerance, which tickers Dime actually lists.
 
+- Product = **model portfolio** (owner chose, Alpha-Picks style): 5 stocks, rules E3, daily Telegram
+  "what to do today". Owner: drawdown tolerance ≤ −25%, Dime free package = 5 trades/month.
+  Real Dime FX/fee cost NOT known → 0.10%/side assumption.
+
 ## Design notes
+- `portfolio_bt.decide_day` is the single rule engine for BOTH backtest and live portfolio
+  (test asserts live day-by-day == simulate). Change rules only there + config `model_portfolio`.
+- State: `data/model_portfolio.json`, committed by the daily workflow; `--limit`/`--demo` runs never touch it.
 - Only the short score is backtested (price-only, rules fixed from literature, no fitting).
   Mid/long use today's yfinance fundamentals — no point-in-time history → not backtestable yet.
 - Backtest uses today's constituents → survivorship bias (disclosed in every report).
