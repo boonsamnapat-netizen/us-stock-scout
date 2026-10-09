@@ -7,7 +7,8 @@ import pandas as pd
 import requests
 
 SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-NDX_URL = "https://en.wikipedia.org/wiki/Nasdaq-100"
+NDX_CSV_URL = ("https://raw.githubusercontent.com/Gary-Strauss/NASDAQ100_Constituents/"
+               "master/data/nasdaq100_constituents.csv")
 UA = {"User-Agent": "us-stock-scout/1.0 (personal research tool)"}
 
 # yfinance sector names -> GICS sector names
@@ -52,25 +53,21 @@ def _find(tables, required):
     raise ValueError(f"no table with columns {required}")
 
 
-def fetch_from_wikipedia() -> pd.DataFrame:
+def fetch_sp500() -> pd.DataFrame:
     sp = _find(_read_tables(SP500_URL), ["Symbol", "Security", "GICS Sector"])
     sp = sp.rename(columns={"Symbol": "ticker", "Security": "name",
                             "GICS Sector": "sector", "GICS Sub-Industry": "industry"})
-    sp = sp[["ticker", "name", "sector", "industry"]].assign(in_sp500=True)
+    return sp[["ticker", "name", "sector", "industry"]].assign(in_sp500=True)
 
-    nd = None
-    for t in _read_tables(NDX_URL):
-        tick = next((c for c in ("Ticker", "Symbol") if c in t.columns), None)
-        comp = next((c for c in ("Company", "Security") if c in t.columns), None)
-        if tick and comp and 90 <= len(t) <= 110:
-            nd = t.rename(columns={tick: "ticker", comp: "name"})
-            break
-    if nd is None:
-        raise ValueError("Nasdaq-100 table not found")
-    nd = nd.rename(columns={"GICS Sector": "sector", "GICS Sub-Industry": "industry"})
-    cols = [c for c in ["ticker", "name", "sector", "industry"] if c in nd.columns]
-    nd = nd[cols].assign(in_ndx=True)
-    return _merge(sp, nd)
+
+def fetch_ndx() -> pd.DataFrame:
+    # Wikipedia no longer has a Nasdaq-100 components table; use a GitHub-maintained CSV.
+    # Its sector column is not GICS, so sectors are left empty and filled from yfinance.
+    nd = pd.read_csv(StringIO(requests.get(NDX_CSV_URL, headers=UA, timeout=30).text))
+    nd = nd.rename(columns={"Ticker": "ticker", "Company": "name"})
+    if "ticker" not in nd.columns or not 90 <= len(nd) <= 110:
+        raise ValueError(f"unexpected Nasdaq-100 CSV ({len(nd)} rows, {list(nd.columns)})")
+    return nd[["ticker", "name"]].assign(in_ndx=True)
 
 
 def _merge(sp: pd.DataFrame, nd: pd.DataFrame) -> pd.DataFrame:
@@ -87,18 +84,29 @@ def _merge(sp: pd.DataFrame, nd: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_universe(cfg: dict, base_dir: str = ".") -> tuple[pd.DataFrame, str]:
-    """Return (universe, source_label)."""
+    """Return (universe, source_label). Each index falls back to the snapshot on its own."""
     ucfg = cfg.get("universe", {})
-    if ucfg.get("refresh_from_wikipedia", True):
+    snap = pd.read_csv(f"{base_dir}/{ucfg.get('snapshot', 'data/universe.csv')}")
+    snap["ticker"] = snap["ticker"].map(normalize_ticker)
+    if not ucfg.get("refresh_from_wikipedia", True):
+        return snap, "snapshot"
+    parts, labels = [], []
+    for label, fetch, flag, cols in (
+            ("S&P500:wikipedia", fetch_sp500, "in_sp500", ["ticker", "name", "sector", "industry"]),
+            ("NDX:github-csv", fetch_ndx, "in_ndx", ["ticker", "name"])):
         try:
-            u = fetch_from_wikipedia()
-            if len(u) >= 450:
-                return u, "wikipedia"
-        except Exception as e:  # network / layout change -> snapshot
-            print(f"[universe] wikipedia failed: {e!r}; using snapshot")
-    u = pd.read_csv(f"{base_dir}/{ucfg.get('snapshot', 'data/universe.csv')}")
-    u["ticker"] = u["ticker"].map(normalize_ticker)
-    return u, "snapshot"
+            parts.append(fetch())
+            labels.append(label)
+        except Exception as e:  # network / layout change -> snapshot for this index
+            print(f"[universe] {label} failed: {e!r}; using snapshot")
+            parts.append(snap.loc[snap[flag], cols].assign(**{flag: True}))
+            labels.append(label.split(":")[0] + ":snapshot")
+    u = _merge(*parts)
+    # keep known GICS sectors from the snapshot for Nasdaq-only names
+    known = snap.set_index("ticker")[["sector", "industry"]]
+    for c in ("sector", "industry"):
+        u[c] = u[c].fillna(u["ticker"].map(known[c]))
+    return u, " + ".join(labels)
 
 
 def fill_sectors(universe: pd.DataFrame, fundamentals: pd.DataFrame) -> pd.DataFrame:

@@ -92,7 +92,7 @@ def _line_mid(t, r, f):
 
 def _line_long(t, r, f):
     return (f"{t} [{sec_th(r['sector'])}] ROE {pct(f.get('returnOnEquity'), False, 0)} "
-            f"| GM {pct(f.get('grossMargins'), False, 0)} | D/E {num(f.get('debtToEquity'), 0)}% | Fwd P/E {num(f.get('forwardPE'))}")
+            f"| GM {pct(f.get('grossMargins'), False, 0)} | D/E {num(f.get('debtToEquity'), 0) + '%' if _ok(f.get('debtToEquity')) else '–'} | Fwd P/E {num(f.get('forwardPE'))}")
 
 
 LINE = {"short": _line_short, "mid": _line_mid, "long": _line_long}
