@@ -112,7 +112,8 @@ def main(argv=None) -> int:
         msgs, tops = sr.weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, new=new_pb)
         for t in new_pb:
             last_alert[t] = {"stage": "pullback", "date": str(asof.date())}
-        state["weekly_week"] = week
+        if a.mode == "auto":                       # manual weekly runs must not consume this week's report
+            state["weekly_week"] = week
         messages += msgs
         scores = pd.DataFrame({"sector": universe.set_index("ticker")["sector"].reindex(close.columns).fillna("Unknown"),
                                "mom_1m": close.iloc[-1] / close.iloc[-22] - 1})

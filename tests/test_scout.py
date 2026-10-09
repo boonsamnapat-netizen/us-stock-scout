@@ -62,7 +62,11 @@ def test_split_text_limits():
 
 
 def _html_balanced(text):
+    import re
     from html.parser import HTMLParser
+    # Telegram rejects any '<' that is not one of its tags (e.g. "< $3B")
+    for m in re.finditer(r"<", text):
+        assert re.match(r"</?(b|i|code)>", text[m.start():]), f"raw '<' at {m.start()}: {text[m.start():m.start()+20]!r}"
 
     class P(HTMLParser):
         def __init__(self):
@@ -298,9 +302,21 @@ def test_scout_classify_and_alerts():
 def test_scout_main_demo(tmp_path):
     import json
     import scout_main
-    assert scout_main.main(["--demo", "--mode", "weekly", "--out", str(tmp_path)]) == 0
+    sent = []
+    import scout.telegram as tg
+    orig = tg.send
+    tg.send = lambda token, chat, msgs: sent.extend(msgs)
+    import os
+    os.environ.setdefault("TELEGRAM_BOT_TOKEN", "x")
+    os.environ.setdefault("TELEGRAM_CHAT_ID", "y")
+    try:
+        assert scout_main.main(["--demo", "--mode", "weekly", "--notify", "--out", str(tmp_path)]) == 0
+    finally:
+        tg.send = orig
+    for m in sent:
+        assert _html_balanced(m.get("text") or m.get("caption", ""))
     st = json.loads((tmp_path / "scout_state_test.json").read_text())
-    assert st["watch"] and st["weekly_week"]
+    assert st["watch"] and "weekly_week" not in st          # manual weekly must not consume the week
     # cached-watchlist daily path (no full fetch), twice
     assert scout_main.main(["--demo", "--mode", "daily", "--out", str(tmp_path)]) == 0
     assert scout_main.main(["--demo", "--mode", "daily", "--out", str(tmp_path)]) == 0
