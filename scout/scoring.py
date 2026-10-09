@@ -42,54 +42,96 @@ def _avg_ranks(parts: dict[str, pd.Series], min_count: int = MIN_COMPONENTS) -> 
     return score.where(ranks.notna().sum(axis=1) >= min_count)
 
 
-def short_score(snap: pd.DataFrame) -> pd.Series:
-    s = _avg_ranks({
+def short_parts(snap: pd.DataFrame) -> dict[str, pd.Series]:
+    return {
         "mom_6_1": snap["mom_6_1"],
         "mom_12_1": snap["mom_12_1"],
         "dist_high": snap["dist_high"],      # closer to high (less negative) = better
-    })
+    }
+
+
+def short_score(snap: pd.DataFrame) -> pd.Series:
+    s = _avg_ranks(short_parts(snap))
     uptrend = snap["close"] > snap["sma200"]
     return s.where(uptrend)
 
 
-def mid_score(snap: pd.DataFrame, fund: pd.DataFrame, min_analysts: int = 5) -> pd.Series:
+def mid_parts(snap: pd.DataFrame, fund: pd.DataFrame, min_analysts: int = 5) -> dict[str, pd.Series]:
     f = fund.reindex(snap.index)
-    price = snap["close"]
     enough = f["numberOfAnalystOpinions"] >= min_analysts
-    upside = (f["targetMeanPrice"] / price - 1).where(enough)
-    rating = (-f["recommendationMean"]).where(enough)   # 1 = strong buy, 5 = sell
-    return _avg_ranks({
+    return {
         "eps_q_growth": f["earningsQuarterlyGrowth"],
         "eps_growth": f["earningsGrowth"],
         "rev_growth": f["revenueGrowth"],
-        "upside": upside,
-        "rating": rating,
+        "upside": (f["targetMeanPrice"] / snap["close"] - 1).where(enough),
+        "rating": (-f["recommendationMean"]).where(enough),   # 1 = strong buy, 5 = sell
         "mom_6_1": snap["mom_6_1"],
-    })
+    }
+
+
+def mid_score(snap: pd.DataFrame, fund: pd.DataFrame, min_analysts: int = 5) -> pd.Series:
+    return _avg_ranks(mid_parts(snap, fund, min_analysts))
 
 
 def _sector_rank(s: pd.Series, sector: pd.Series) -> pd.Series:
     return s.groupby(sector).rank(pct=True)
 
 
-def long_score(snap: pd.DataFrame, fund: pd.DataFrame, sector: pd.Series) -> pd.Series:
+def long_parts(snap: pd.DataFrame, fund: pd.DataFrame) -> dict[str, pd.Series]:
     f = fund.reindex(snap.index)
-    sec = sector.reindex(snap.index).fillna("Unknown")
     fpe = f["forwardPE"].where(f["forwardPE"] > 0, np.inf)   # losses -> worst valuation
     fpe = fpe.where(f["forwardPE"].notna())
-    fcf_yield = f["freeCashflow"] / f["marketCap"]
-    parts = {
+    return {
         "roe": f["returnOnEquity"],
         "gross_margin": f["grossMargins"],
         "op_margin": f["operatingMargins"],
         "low_debt": -f["debtToEquity"],
         "rev_growth": f["revenueGrowth"],
-        "fcf_yield": fcf_yield,
+        "fcf_yield": f["freeCashflow"] / f["marketCap"],
         "cheap_fpe": -fpe,
     }
-    ranks = pd.DataFrame({k: _sector_rank(v, sec) for k, v in parts.items()})
-    score = ranks.mean(axis=1)
-    return score.where(ranks.notna().sum(axis=1) >= 4)
+
+
+def long_ranks(snap: pd.DataFrame, fund: pd.DataFrame, sector: pd.Series) -> pd.DataFrame:
+    sec = sector.reindex(snap.index).fillna("Unknown")
+    return pd.DataFrame({k: _sector_rank(v, sec) for k, v in long_parts(snap, fund).items()})
+
+
+def long_score(snap: pd.DataFrame, fund: pd.DataFrame, sector: pd.Series) -> pd.Series:
+    ranks = long_ranks(snap, fund, sector)
+    return ranks.mean(axis=1).where(ranks.notna().sum(axis=1) >= 4)
+
+
+def part_ranks(snap, fund, sector, min_analysts: int = 5) -> dict[str, pd.DataFrame]:
+    """Per-component percentile ranks (0..1) per horizon — used to explain a pick."""
+    return {
+        "short": pd.DataFrame({k: v.rank(pct=True) for k, v in short_parts(snap).items()}),
+        "mid": pd.DataFrame({k: v.rank(pct=True) for k, v in mid_parts(snap, fund, min_analysts).items()}),
+        "long": long_ranks(snap, fund, sector),
+    }
+
+
+def factor_grades(snap: pd.DataFrame, fund: pd.DataFrame, sector: pd.Series,
+                  close: pd.DataFrame) -> pd.DataFrame:
+    """Seeking-Alpha-style factor percentiles (0..1). Quality/value are vs. the stock's sector."""
+    f = fund.reindex(snap.index)
+    sec = sector.reindex(snap.index).fillna("Unknown")
+    lp = long_parts(snap, fund)
+
+    def avg(ranks: dict, min_count: int) -> pd.Series:
+        df = pd.DataFrame(ranks)
+        return df.mean(axis=1).where(df.notna().sum(axis=1) >= min_count)
+
+    vol = close.pct_change().iloc[-252:].std().reindex(snap.index)
+    return pd.DataFrame({
+        "growth": avg({k: f[k].rank(pct=True) for k in
+                       ("earningsQuarterlyGrowth", "earningsGrowth", "revenueGrowth")}, 2),
+        "quality": avg({k: _sector_rank(lp[k], sec) for k in
+                        ("roe", "gross_margin", "op_margin", "low_debt")}, 2),
+        "value": avg({k: _sector_rank(lp[k], sec) for k in ("cheap_fpe", "fcf_yield")}, 1),
+        "momentum": avg({k: v.rank(pct=True) for k, v in short_parts(snap).items()}, 2),
+        "stability": (-vol).rank(pct=True),
+    })
 
 
 def sector_medians(fund: pd.DataFrame, sector: pd.Series, col: str) -> pd.Series:

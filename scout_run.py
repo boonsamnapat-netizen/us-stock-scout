@@ -17,7 +17,7 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from scout import backtest, data, report, scoring, telegram, universe as uni
+from scout import backtest, brief, data, heatmap, report, scoring, telegram, universe as uni
 
 BASE = Path(__file__).resolve().parent
 
@@ -29,6 +29,8 @@ def main(argv=None) -> int:
     ap.add_argument("--notify", action="store_true", help="send to Telegram")
     ap.add_argument("--skip-stale", action="store_true",
                     help="exit quietly if latest bar is not from today/yesterday (US holiday)")
+    ap.add_argument("--weekly", action="store_true",
+                    help="include the backtest summary (sent automatically on Fridays' data)")
     ap.add_argument("--limit", type=int, default=0, help="only first N tickers (debug)")
     ap.add_argument("--out", default=str(BASE / "output"))
     a = ap.parse_args(argv)
@@ -64,15 +66,20 @@ def main(argv=None) -> int:
                                  btc.get("top_n", 10), cfg.get("fees", {}).get("per_side_pct", 0.10),
                                  btc.get("min_history_days", 273))
     sections = report.build_report(scores, fund, universe, close, bench, bt, cfg, src)
-    messages = telegram.pack(sections)
 
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     stamp = close.index[-1].strftime("%Y-%m-%d")
-    (out / f"report_{stamp}.txt").write_text("\n\n".join(sections), encoding="utf-8")
+    (out / f"report_full_{stamp}.txt").write_text("\n\n".join(sections), encoding="utf-8")
     scores.join(fund, rsuffix="_f").to_csv(out / f"scores_{stamp}.csv")
     bt["periods"].to_csv(out / f"backtest_short_{stamp}.csv", index=False)
-    print("\n\n=====\n\n".join(messages))
+    hm = heatmap.sector_heatmap(scores, fund, str(out / f"heatmap_{stamp}.png"), close.index[-1])
+    weekly = a.weekly or close.index[-1].weekday() == 4   # Friday close -> Saturday morning TH
+    messages = brief.build(scores, fund, universe, close, bench, bt, cfg, hm, weekly)
+    (out / f"telegram_{stamp}.txt").write_text(
+        "\n\n=====\n\n".join(m.get("text") or f"[photo] {m['photo']}" for m in messages), encoding="utf-8")
+    for m in messages:
+        print(m.get("text") or f"[photo] {m['photo']} — {m.get('caption', '')}", end="\n\n=====\n\n")
 
     if a.notify:
         token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")

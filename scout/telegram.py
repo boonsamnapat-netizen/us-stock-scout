@@ -43,16 +43,34 @@ def pack(sections: list[str], limit: int = LIMIT) -> list[str]:
     return msgs
 
 
-def send(token: str, chat_id: str, messages: list[str]) -> None:
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
+def _post(url: str, **kw) -> None:
+    for attempt in range(3):
+        r = requests.post(url, timeout=60, **kw)
+        if r.ok:
+            return
+        if r.status_code == 429:
+            time.sleep(r.json().get("parameters", {}).get("retry_after", 5))
+            continue
+        raise RuntimeError(f"Telegram error {r.status_code}: {r.text[:300]}")
+    raise RuntimeError("Telegram: too many retries")
+
+
+def send(token: str, chat_id: str, messages: list) -> None:
+    """messages: plain strings, or dicts {"text", "buttons"?} / {"photo", "caption"?} (HTML)."""
+    base = f"https://api.telegram.org/bot{token}"
     for m in messages:
-        for attempt in range(3):
-            r = requests.post(url, json={"chat_id": chat_id, "text": m,
-                                         "disable_web_page_preview": True}, timeout=30)
-            if r.ok:
-                break
-            if r.status_code == 429:
-                time.sleep(r.json().get("parameters", {}).get("retry_after", 5))
-                continue
-            raise RuntimeError(f"Telegram error {r.status_code}: {r.text[:200]}")
+        if isinstance(m, str):
+            m = {"text": m, "plain": True}
+        if "photo" in m:
+            with open(m["photo"], "rb") as fh:
+                _post(f"{base}/sendPhoto", data={"chat_id": chat_id, "caption": m.get("caption", ""),
+                                                 "parse_mode": "HTML"}, files={"photo": fh})
+        else:
+            for part in split_text(m["text"]):
+                body = {"chat_id": chat_id, "text": part, "disable_web_page_preview": True}
+                if not m.get("plain"):
+                    body["parse_mode"] = "HTML"
+                if m.get("buttons"):
+                    body["reply_markup"] = {"inline_keyboard": m["buttons"]}
+                _post(f"{base}/sendMessage", json=body)
         time.sleep(1)

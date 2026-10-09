@@ -59,3 +59,44 @@ def test_split_text_limits():
     chunks = telegram.split_text(text, 1000)
     assert all(len(c) <= 1000 for c in chunks)
     assert "".join(c.replace("\n", "") for c in chunks) == "x" * 20000
+
+
+def _html_balanced(text):
+    from html.parser import HTMLParser
+
+    class P(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.stack = []
+
+        def handle_starttag(self, tag, attrs):
+            assert tag in ("b", "i", "code"), tag
+            self.stack.append(tag)
+
+        def handle_endtag(self, tag):
+            assert self.stack and self.stack.pop() == tag, tag
+
+    p = P()
+    p.feed(text)
+    return not p.stack
+
+
+def test_brief_messages(tmp_path):
+    from scout import brief, heatmap
+    u, close, _, bench, fund = data.demo_data(n=40)
+    bt = backtest.backtest_short(close, bench["SPY"], top_n=5)
+    sc = scoring.score_all(close, fund, u)
+    hm = heatmap.sector_heatmap(sc, fund, str(tmp_path / "hm.png"), close.index[-1])
+    msgs = brief.build(sc, fund, u, close, bench, bt, {"report": {"top_n": 5}}, hm, weekly=True)
+    texts = [m["text"] for m in msgs if "text" in m]
+    assert any("photo" in m for m in msgs)
+    assert len(texts) == 5                      # summary + 3 cards + weekly backtest
+    for t in texts:
+        assert len(t) <= telegram.LIMIT
+        assert _html_balanced(t)
+    assert texts[0].count("<b>T") == 15         # 5 per horizon
+
+
+def test_grades():
+    from scout.brief import grade
+    assert [grade(x) for x in (0.95, 0.7, 0.5, 0.3, 0.1, float("nan"))] == ["A", "B", "C", "D", "F", "–"]

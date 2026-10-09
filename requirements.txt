@@ -5,3 +5,5 @@ requests>=2.31
 pyyaml>=6.0
 lxml>=4.9
 pytest>=7.0
+matplotlib>=3.7
+squarify>=0.4
