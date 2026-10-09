@@ -19,6 +19,7 @@ MAX_EXTENSION = 0.10
 
 
 def stage_panels(close: pd.DataFrame, volume: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
+    close = close.ffill(limit=3)          # one missing bar must not blank 200-day SMAs for 200 days
     sma50 = close.rolling(50, min_periods=50).mean()
     sma200 = close.rolling(200, min_periods=200).mean()
     sma200_up = sma200 >= sma200.shift(21)
@@ -66,6 +67,7 @@ def group_strength(close: pd.DataFrame, industry: pd.Series, spy: pd.Series, min
         sma50 = c.rolling(50).mean()
         strong = (c.iloc[-1] > sma50.iloc[-1]) & (sma50.iloc[-1] > sma50.iloc[-11])
         df = pd.DataFrame({"industry": industry.reindex(c.columns), "rel3m": rel3m, "strong": strong})
+        df = df[df["rel3m"].notna()]
         g = df.groupby("industry").agg(n=("rel3m", "size"), rel3m=("rel3m", "median"),
                                        breadth=("strong", "mean"))
         g = g[g["n"] >= min_members]
@@ -83,6 +85,7 @@ def group_strength(close: pd.DataFrame, industry: pd.Series, spy: pd.Series, min
 # Sources (secondary; see research notes): Minervini Trend Template; IBD pivot/buy range/volume;
 # O'Neil min base length & depth; Weinstein throwback. Windows marked (choice) are ours, not the books'.
 def trend_template(close: pd.DataFrame, rs_min: float = 0.70) -> pd.DataFrame:
+    close = close.ffill(limit=3)
     s50, s150, s200 = (close.rolling(n, min_periods=n).mean() for n in (50, 150, 200))
     lo52 = close.rolling(252, min_periods=200).min()
     hi52 = close.rolling(252, min_periods=200).max()
@@ -93,12 +96,15 @@ def trend_template(close: pd.DataFrame, rs_min: float = 0.70) -> pd.DataFrame:
 
 
 def stage_panels_v2(close: pd.DataFrame, volume: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    close = close.ffill(limit=3)
     vol = volume.reindex_like(close)
     vol50 = vol.rolling(50, min_periods=50).mean()
     tt = trend_template(close)
     base_hi = close.shift(1).rolling(35, min_periods=35).max()           # 7-week base (O'Neil)
     base_lo = close.shift(1).rolling(35, min_periods=35).min()
     depth_ok = (base_hi - base_lo) / base_hi <= 0.33                     # cup depth limit (O'Neil)
+    based = close.shift(1).rolling(10, min_periods=10).max() < base_hi   # high set >= 10 days ago (choice)
+    depth_ok = depth_ok & based
     pivot = base_hi + 0.10                                               # IBD pivot
     sig = (tt & depth_ok & (close > pivot) & (close <= pivot * 1.05)    # IBD 5% buy range
            & (vol >= 1.4 * vol50))                                       # IBD +40% volume
@@ -112,7 +118,8 @@ def stage_panels_v2(close: pd.DataFrame, volume: pd.DataFrame) -> dict[str, pd.D
     piv40 = pivot.where(sig).ffill(limit=40)                             # breakout in last 40 days (choice)
     support = np.maximum(piv40, s50)
     vol5 = vol.rolling(5, min_periods=5).mean()
-    throwback = (piv40.notna() & ~recent & (close > s150) & (s150 > s200)
+    advanced = close.rolling(40, min_periods=1).max() >= piv40 * 1.05    # moved up after breakout (choice)
+    throwback = (piv40.notna() & ~recent & advanced & (close > s150) & (s150 > s200)
                  & (close <= support * 1.03) & (close >= piv40 * 0.97)    # 3% tolerance (choice)
                  & (vol5 < vol50))                                        # lighter volume
     return {"breakout2": breakout.fillna(False), "throwback": throwback.fillna(False),

@@ -145,8 +145,8 @@ def card(t, cls, fund, est, stage, dd, close, sec_pe) -> dict:
     tgt = f.get("targetMeanPrice")
     kind = "🌱 กำลังจะกำไร" if cls.loc[t, "emerging"] else "✅ พื้นฐานดี"
     lines = [
-        f"<b>🔎 {escape(t)} — {escape(str(f.get('longName') or t))}</b>",
-        f"{escape(str(f.get('industry') or ''))} · ราคา ${p.iloc[-1]:,.2f} · {STAGE_TH.get(stage.get(t), '–')}",
+        f"<b>🔎 {escape(t)} — {escape(str(f.get('longName')) if _ok(f.get('longName')) else t)}</b>",
+        f"{escape(str(f.get('industry'))) if _ok(f.get('industry')) else '–'} · ราคา ${p.iloc[-1]:,.2f} · {STAGE_TH.get(stage.get(t), '–')}",
         f"{kind}",
         "",
         "<b>อนาคต (ประมาณการนักวิเคราะห์)</b>",
@@ -171,11 +171,19 @@ def card(t, cls, fund, est, stage, dd, close, sec_pe) -> dict:
             "buttons": [[{"text": f"📈 กราฟ {t}", "url": f"https://finance.yahoo.com/quote/{t}"}]]}
 
 
-def daily_alerts(asof, cls, fund, est, stage, prev_stage: dict, dd, close) -> dict | None:
+def daily_alerts(asof, cls, fund, est, stage, prev_stage: dict, dd, close,
+                 last_alert: dict | None = None, cooldown_days: int = 20) -> dict | None:
     today = pd.Timestamp(datetime.now(timezone.utc).date())
     vol = close.pct_change().iloc[-60:].std() * np.sqrt(252)
     watch = cls.index[cls["good"] | cls["emerging"]]
-    new = [t for t in watch if stage.get(t) in ("breakout", "pullback") and prev_stage.get(t) != stage.get(t)]
+    last_alert = last_alert or {}
+
+    def cooled(t):
+        a = last_alert.get(t)
+        return not a or a.get("stage") != stage.get(t) or (asof - pd.Timestamp(a["date"])).days > cooldown_days
+
+    new = [t for t in watch if stage.get(t) in ("breakout", "pullback")
+           and t in prev_stage and prev_stage[t] != stage.get(t) and cooled(t)]
     if not new:
         return None
     new = sorted(new, key=lambda t: -(cls.loc[t, "fscore"] if _ok(cls.loc[t, "fscore"]) else 0))[:10]
@@ -187,4 +195,4 @@ def daily_alerts(asof, cls, fund, est, stage, prev_stage: dict, dd, close) -> di
             lines += [line(t, cls, fund, est, stage, dd, vol, today)
                       + (" 🌱" if cls.loc[t, "emerging"] else "") for t in ts]
     lines += ["", "<i>รายชื่อให้ศึกษาต่อ ไม่ใช่คำแนะนำซื้อ</i>"]
-    return {"text": "\n".join(lines)}
+    return {"text": "\n".join(lines), "tickers": new}

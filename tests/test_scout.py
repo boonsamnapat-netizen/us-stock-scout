@@ -278,16 +278,42 @@ def test_scout_classify_and_alerts():
     close = _series_close({t: np.linspace(50, 100, 300) for t in tick})
     stage = pd.Series({"GOOD": "breakout", "EMRG": "pullback", "BAD": "breakout"})
     dd = pd.Series({"GOOD": 0.0, "EMRG": -0.15, "BAD": 0.0})
-    msg = sr.daily_alerts(close.index[-1], cls, fund, est, stage, {}, dd, close)
+    none = {t: "none" for t in tick}
+    msg = sr.daily_alerts(close.index[-1], cls, fund, est, stage, none, dd, close)
     assert "GOOD" in msg["text"] and "EMRG" in msg["text"] and "BAD" not in msg["text"]
+    # unknown previous stage (ticker missing yesterday) -> no alert
+    assert sr.daily_alerts(close.index[-1], cls, fund, est, stage, {}, dd, close) is None
+    # alerted for the same stage 5 days ago -> cooldown, no repeat
+    recent = {t: {"stage": stage[t], "date": str((close.index[-1] - pd.Timedelta(days=5)).date())} for t in tick}
+    assert sr.daily_alerts(close.index[-1], cls, fund, est, stage, none, dd, close, recent) is None
     assert _html_balanced(msg["text"])
     # same stages as yesterday -> no alert
     assert sr.daily_alerts(close.index[-1], cls, fund, est, stage, stage.to_dict(), dd, close) is None
     c = sr.card("GOOD", cls, fund, est, stage, dd, close, pd.Series({"Tech": 20.0}))
     assert _html_balanced(c["text"])
+    fund.loc["GOOD", "longName"] = np.nan                     # pandas 3: missing str is NaN
+    assert "nan" not in sr.card("GOOD", cls, fund, est, stage, dd, close, pd.Series(dtype=float))["text"]
 
 
 def test_scout_main_demo(tmp_path):
     import scout_main
     assert scout_main.main(["--demo", "--mode", "weekly", "--out", str(tmp_path)]) == 0
     assert scout_main.main(["--demo", "--mode", "daily", "--out", str(tmp_path)]) == 0
+
+
+
+def test_stage_gap_and_base_rules():
+    import numpy as np
+    from scout import stages
+    n = 520
+    t = np.arange(n)
+    up = 100 * 1.002 ** t
+    close = _series_close({"A": up.copy(), "B": up.copy()})
+    close.iloc[-150, 0] = np.nan                                 # one missing bar
+    st = stages.stage_today(stages.stage_panels(close))
+    assert st["A"] == st["B"] != "none"                      # gap no longer knocks A out
+    # steady riser with a volume spike is NOT a v2 breakout (no base)
+    vol = pd.DataFrame(1e6, index=close.index, columns=close.columns)
+    vol.iloc[-1] = 3e6
+    p2 = stages.stage_panels_v2(close, vol)
+    assert not p2["breakout2_day"].iloc[-1].any()

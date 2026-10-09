@@ -37,10 +37,17 @@ def main(argv=None) -> int:
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
 
+    state_path = BASE / STATE_FILE if not (a.demo or a.limit) else out / "scout_state_test.json"
+    state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    # weekly = the Friday-UTC run (Saturday morning TH), so a Friday holiday still gets a report
+    mode = a.mode if a.mode != "auto" else ("weekly" if datetime.now(timezone.utc).weekday() == 4 else "daily")
+    if mode == "daily" and not state.get("watch"):
+        print("[scout] no cached watchlist yet -> running a full (weekly-style) classification")
+    full = a.demo or mode == "weekly" or not state.get("watch")
+
     if a.demo:
         universe, close, volume, bench, fund = data.demo_data(n=120, years=3)
         fund["industry"] = [f"Industry {i % 15}" for i in range(len(fund))]
-        fund["profitMargins"] = fund["profitMargins"]
         est = estimates.demo(close.columns)
         spy = bench["SPY"]
     else:
@@ -53,25 +60,39 @@ def main(argv=None) -> int:
         spy = close_all["SPY"]
         close = close_all.drop(columns=["SPY"])
         volume = volume.drop(columns=["SPY"], errors="ignore")
-        if a.skip_stale and (datetime.now(timezone.utc).date() - close.index[-1].date()).days > 1:
-            print(f"[scout] latest bar {close.index[-1].date()} is stale (US holiday) -> skip")
+        if a.skip_stale and (datetime.now(timezone.utc).date() - close.index[-1].date()).days > 3:
+            print(f"[scout] latest bar {close.index[-1].date()} is stale -> skip")
             return 0
-        print(f"[scout] prices ok ({close.shape[1]} tickers, last {close.index[-1].date()}); fundamentals...")
-        fund = data.fetch_fundamentals(list(close.columns))
-        print("[scout] analyst estimates...")
-        est = estimates.fetch(list(close.columns))
+        print(f"[scout] prices ok ({close.shape[1]} tickers, last {close.index[-1].date()})")
 
     asof = close.index[-1]
-    mode = a.mode if a.mode != "auto" else ("weekly" if asof.weekday() == 4 else "daily")
     panels = stages.stage_panels(close, volume)
     stage = stages.stage_today(panels)
     dd = panels["dd"].iloc[-1]
-    cls = sr.classify(fund, est, close.columns, cfg.get("scout", {}).get("good_top_pct", 0.30))
-
-    state_path = BASE / STATE_FILE if not (a.demo or a.limit) else out / "scout_state_test.json"
-    prev = json.loads(state_path.read_text()).get("stage", {}) if state_path.exists() else {}
+    prev = state.get("stage", {})
+    last_alert = state.get("last_alert", {})
+    good_top = cfg.get("scout", {}).get("good_top_pct", 0.30)
 
     messages = []
+    if full:
+        if not a.demo:
+            print("[scout] fundamentals (all)...")
+            fund = data.fetch_fundamentals(list(close.columns))
+            print("[scout] analyst estimates (all)...")
+            est = estimates.fetch(list(close.columns))
+        cls = sr.classify(fund, est, close.columns, good_top)
+        watch = cls[cls["good"] | cls["emerging"]]
+        state["watch"] = json.loads(watch.to_json(orient="index"))
+        state["watch_date"] = str(asof.date())
+    else:
+        cls = pd.DataFrame.from_dict(state["watch"], orient="index")
+        cls[["good", "emerging"]] = cls[["good", "emerging"]].astype(bool)
+        cand = [t for t in cls.index if stage.get(t) in ("breakout", "pullback") and prev.get(t) != stage.get(t)]
+        print(f"[scout] daily: {len(cand)} watchlist stock(s) changed stage -> fetching their data")
+        fund = data.fetch_fundamentals(cand) if cand else pd.DataFrame(columns=data.INFO_FIELDS)
+        est = estimates.fetch(cand) if cand else pd.DataFrame(columns=estimates.FIELDS)
+        cls = cls.loc[cand] if cand else cls.iloc[0:0]
+
     if mode == "weekly":
         groups = stages.group_strength(close, fund["industry"], spy)
         msgs, tops = sr.weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe)
@@ -83,16 +104,23 @@ def main(argv=None) -> int:
             messages.append({"photo": hm, "caption": "🗺 แผนที่ตลาด 1 เดือน · ขนาด = มูลค่าบริษัท · เขียวขึ้น / แดงลง"})
         sec_pe = sector_medians(fund, fund["sector"].fillna("Unknown"), "forwardPE")
         messages += [sr.card(t, cls, fund, est, stage, dd, close, sec_pe) for t in tops]
-    else:
-        alert = sr.daily_alerts(asof, cls, fund, est, stage, prev, dd, close)
+    elif len(cls):
+        alert = sr.daily_alerts(asof, cls, fund, est, stage, prev, dd, close, last_alert)
         if alert:
             messages.append(alert)
+            for t in alert.get("tickers", []):
+                last_alert[t] = {"stage": stage.get(t), "date": str(asof.date())}
 
+    # merge (never drop tickers that failed to download today)
+    state["stage"] = {**prev, **{k: v for k, v in stage.items() if k in close.columns and close[k].iloc[-1:].notna().all()}}
+    state["date"] = str(asof.date())
+    state["last_alert"] = last_alert
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps({"date": str(asof.date()), "stage": stage.to_dict()}, indent=0))
-    table = cls.join(est).join(fund, rsuffix="_f")
-    table.insert(0, "stage", stage)
-    table.to_csv(out / f"scout_{asof:%Y-%m-%d}.csv")
+    state_path.write_text(json.dumps(state, indent=0, default=str))
+    if full:
+        table = cls.join(est).join(fund, rsuffix="_f")
+        table.insert(0, "stage", stage)
+        table.to_csv(out / f"scout_{asof:%Y-%m-%d}.csv")
     for m in messages:
         print(m.get("text") or f"[photo] {m['photo']}", end="\n\n=====\n\n")
     print(f"[scout] mode={mode} · {len(messages)} message(s)")
