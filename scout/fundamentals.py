@@ -12,7 +12,8 @@ import numpy as np
 import pandas as pd
 import requests
 
-UA = {"User-Agent": "us-stock-scout research 283203097+boonsamnapat-netizen@users.noreply.github.com"}
+UA = {"User-Agent": "UsStockScout research 283203097+boonsamnapat-netizen@users.noreply.github.com",
+      "Accept-Encoding": "gzip, deflate"}
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 FORMS = {"10-Q", "10-K", "10-Q/A", "10-K/A", "20-F", "40-F"}
@@ -24,8 +25,20 @@ CONCEPTS = {
 
 
 def cik_map(session: requests.Session) -> dict[str, int]:
-    js = session.get(TICKERS_URL, headers=UA, timeout=30).json()
-    return {v["ticker"].upper().replace(".", "-"): int(v["cik_str"]) for v in js.values()}
+    r = session.get(TICKERS_URL, headers=UA, timeout=30)
+    print(f"[edgar] company_tickers.json -> HTTP {r.status_code}, {len(r.content)} bytes, "
+          f"type {r.headers.get('content-type')}")
+    if r.status_code != 200 or "json" not in r.headers.get("content-type", ""):
+        print(f"[edgar] body starts: {r.text[:300]!r}")
+        return {}
+    return {v["ticker"].upper().replace(".", "-"): int(v["cik_str"]) for v in r.json().values()}
+
+
+def cik_from_wikipedia() -> dict[str, int]:
+    """Fallback: S&P 500 table on Wikipedia has a CIK column."""
+    from .universe import SP500_URL, _find, _read_tables, normalize_ticker
+    t = _find(_read_tables(SP500_URL), ["Symbol", "CIK"])
+    return {normalize_ticker(a): int(b) for a, b in zip(t["Symbol"], t["CIK"])}
 
 
 def _rows(facts: dict, concept: str) -> pd.DataFrame:
@@ -111,6 +124,10 @@ def fetch_all(tickers: list[str], pause: float = 0.12) -> dict[str, dict[str, pd
     """{ticker: {'revenue': signals, 'net_income': signals}} — run where sec.gov is reachable."""
     s = requests.Session()
     ciks = cik_map(s)
+    if not ciks:
+        ciks = cik_from_wikipedia()
+        print(f"[edgar] using Wikipedia CIKs ({len(ciks)})")
+    first = True
     out, missing = {}, []
     for t in tickers:
         cik = ciks.get(t)
@@ -119,6 +136,10 @@ def fetch_all(tickers: list[str], pause: float = 0.12) -> dict[str, dict[str, pd
             continue
         try:
             r = s.get(FACTS_URL.format(cik=cik), headers=UA, timeout=60)
+            if first:
+                print(f"[edgar] first companyfacts ({t}) -> HTTP {r.status_code}: {r.text[:200]!r}"
+                      if r.status_code != 200 else f"[edgar] first companyfacts ({t}) OK")
+                first = False
             if r.status_code != 200:
                 missing.append(t)
                 continue
