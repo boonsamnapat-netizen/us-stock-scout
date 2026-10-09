@@ -16,7 +16,11 @@ Decision-support only; no profit guarantee — always quote honest, net-of-fees 
 - NOT yet provided: real Dime fee (config `fees.per_side_pct` is an ASSUMPTION), budget,
   risk tolerance, which tickers Dime actually lists.
 
-- Product = **model portfolio** (owner chose, Alpha-Picks style): 5 stocks, rules E3, daily Telegram
+- 2026-10-09: owner PAUSED everything (daily schedule commented out). Model portfolios E3/F are
+  stopped — do NOT tell the owner to trade them. New direction = the original goal: a **stock scout**
+  (good fundamentals, 1–3y outlook, early breakout / pullback-in-uptrend, emerging industry themes),
+  owner decides trades himself.
+- (Previous, paused) Product = **model portfolio** (owner chose, Alpha-Picks style): 5 stocks, rules E3, daily Telegram
   "what to do today". Owner: drawdown tolerance ≤ −25%, Dime free package = 5 trades/month.
   Real Dime FX/fee cost NOT known (owner confirmed 2026-10-09: keep 0.10%/side assumption).
 

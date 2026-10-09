@@ -1,9 +1,10 @@
 name: Daily US Stock Scout
 
 on:
-  schedule:
-    # 23:15 UTC Mon–Fri = after US close (both EDT/EST) = 06:15 Thai time Tue–Sat
-    - cron: "15 23 * * 1-5"
+  # PAUSED 2026-10-09 by owner ("หยุดทุกอย่าง") — model portfolio E3/F stopped; moving to the scout.
+  # schedule:
+  #   # 23:15 UTC Mon–Fri = after US close (both EDT/EST) = 06:15 Thai time Tue–Sat
+  #   - cron: "15 23 * * 1-5"
   workflow_dispatch:
     inputs:
       notify:
