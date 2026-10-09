@@ -22,6 +22,10 @@ class Rules:
     max_trades_month: int = 5    # Dime free package
     fee_per_side_pct: float = 0.10
     replace_all: bool = False    # True = classic "rebalance to top N" each check (ignores bands)
+    gate_sma: int = 200          # regime: SPY above its N-day SMA
+    stop_loss_pct: float = 0.0   # sell a holding that falls this much below its entry (0 = off)
+    max_vol: float = 0.0         # skip buys with 60-day annualised vol above this (0 = off)
+    invest_frac: float = 1.0     # fraction of equity in stocks; rest stays cash
 
 
 def score_panel(close: pd.DataFrame) -> pd.DataFrame:
@@ -43,12 +47,13 @@ def simulate(close: pd.DataFrame, bench: pd.Series, rules: Rules, start: int = 2
     score = score_panel(close) if score is None else score
     pct_rank = score.rank(axis=1, ascending=False, pct=True)   # 0 = best
     bench = bench.reindex(close.index).ffill()
-    regime_up = bench > bench.rolling(200, min_periods=200).mean()
+    regime_up = bench > bench.rolling(rules.gate_sma, min_periods=rules.gate_sma).mean()
+    vol60 = close.pct_change().rolling(60).std() * np.sqrt(252)
     fee = rules.fee_per_side_pct / 100
     dates = close.index
     px = close.to_numpy()
 
-    cash, units = 1.0, {}            # ticker col index -> units
+    cash, units, entry = 1.0, {}, {}   # ticker col index -> units / entry price
     equity, trades_log = [], []
     month, trades_this_month = None, 0
 
@@ -76,6 +81,7 @@ def simulate(close: pd.DataFrame, bench: pd.Series, rules: Rules, start: int = 2
                 if np.isnan(p):
                     return
                 cash += units.pop(j) * p * (1 - fee)
+                entry.pop(j, None)
                 trades_this_month += 1
                 trades_log.append((d, close.columns[j], "sell"))
 
@@ -88,7 +94,8 @@ def simulate(close: pd.DataFrame, bench: pd.Series, rules: Rules, start: int = 2
                 to_sell = [j for j in held if j not in top]
             else:
                 to_sell = [j for j in held
-                           if not (rk.iloc[j] <= rules.exit_pct)]   # NaN (below SMA200) -> sell
+                           if not (rk.iloc[j] <= rules.exit_pct)   # NaN (below SMA200) -> sell
+                           or (rules.stop_loss_pct and px[i, j] < entry[j] * (1 - rules.stop_loss_pct))]
                 to_sell.sort(key=lambda j: -(rk.iloc[j] if not np.isnan(rk.iloc[j]) else 9))
             for j in to_sell:
                 if trades_this_month >= rules.max_trades_month and not (rules.gate == "cash" and not up):
@@ -106,10 +113,13 @@ def simulate(close: pd.DataFrame, bench: pd.Series, rules: Rules, start: int = 2
                     j = cols[t]
                     if j in units or np.isnan(px[i, j]):
                         continue
-                    alloc = min(cash, value / rules.n_hold)
+                    if rules.max_vol and vol60.iat[i, j] > rules.max_vol:
+                        continue
+                    alloc = min(cash, value * rules.invest_frac / rules.n_hold)
                     if alloc <= 0:
                         break
                     units[j] = alloc * (1 - fee) / px[i, j]
+                    entry[j] = px[i, j]
                     cash -= alloc
                     trades_this_month += 1
                     trades_log.append((d, t, "buy"))

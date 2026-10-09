@@ -15,16 +15,14 @@ import yaml
 from scout import data, universe as uni
 from scout.portfolio_bt import Rules, score_panel, simulate
 
+E = dict(check="daily", gate="cash")
 VARIANTS = [
-    Rules("A naive: monthly top5 replace-all, no gate", check="monthly", replace_all=True, gate="none",
-          max_trades_month=99),
-    Rules("B weekly 10/30, no gate", gate="none"),
-    Rules("C weekly 10/30, no new buys in downtrend", gate="nobuy"),
-    Rules("D weekly 10/30, cash in downtrend", gate="cash"),
-    Rules("E daily 10/30, cash in downtrend", check="daily", gate="cash"),
-    Rules("F weekly 5/20, cash in downtrend", entry_pct=0.05, exit_pct=0.20, gate="cash"),
-    Rules("G weekly 10/50, cash in downtrend", exit_pct=0.50, gate="cash"),
-    Rules("H weekly 10/30, cash in downtrend, n=8", n_hold=8, gate="cash"),
+    Rules("E  daily 10/30, cash in downtrend (round-1 best)", **E),
+    Rules("E1 + faster regime gate (SPY vs 100-day)", gate_sma=100, **E),
+    Rules("E2 + stop-loss -15% from entry", stop_loss_pct=0.15, **E),
+    Rules("E3 + skip very volatile stocks (>60%/yr)", max_vol=0.60, **E),
+    Rules("E4 + only 75% invested, 25% cash", invest_frac=0.75, **E),
+    Rules("E5 = E1+E2+E3 combined", gate_sma=100, stop_loss_pct=0.15, max_vol=0.60, **E),
 ]
 
 
@@ -51,7 +49,7 @@ def main():
         r.fee_per_side_pct = a.fee
         res = simulate(close, spy, r, score=score)
         rows.append({"rules": r.name, **res["stats"]})
-        res["trades"].to_csv(Path("output") / f"trades_{r.name[0]}.csv", index=False)
+        res["trades"].to_csv(Path("output") / f"trades_{r.name.split()[0]}.csv", index=False)
     df = pd.DataFrame(rows).set_index("rules")
     Path("output").mkdir(exist_ok=True)
     df.to_csv("output/portfolio_research.csv")
