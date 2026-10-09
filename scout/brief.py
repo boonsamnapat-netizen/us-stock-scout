@@ -85,6 +85,50 @@ def reason_text(key: str, t: str, r: pd.Series, f: pd.Series, sec_pe: pd.Series)
     return None
 
 
+SHORT_PHRASE = {
+    "mom_6_1": "ขึ้นแรง", "mom_12_1": "ขึ้นแรง", "dist_high": "ใกล้จุดสูงสุด",
+    "eps_q_growth": "กำไรโตแรง", "eps_growth": "กำไรโตแรง", "rev_growth": "รายได้โต",
+    "upside": "เป้านักวิเคราะห์สูง", "rating": "นักวิเคราะห์ให้ซื้อ",
+    "roe": "กำไรดี", "gross_margin": "กำไรดี", "op_margin": "กำไรดี",
+    "low_debt": "หนี้ต่ำ", "fcf_yield": "เงินสดดี", "cheap_fpe": "ราคาไม่แพง",
+}
+ICONS = [("งบออก", "📅", "งบใกล้ออก"), ("ผันผวนสูง", "🎢", "ผันผวนสูง"), ("ยังขาดทุน", "💸", "ยังขาดทุน"),
+         ("ราคาเกินเป้า", "🎯", "เกินเป้านักวิเคราะห์"), ("หนี้สูง", "💳", "หนี้สูง")]
+
+
+def short_reason(h: str, t: str, ranks: dict, r, f, sec_pe, n: int = 2) -> str:
+    """No-number phrase from the stock's strongest components, e.g. 'ขึ้นแรง ใกล้จุดสูงสุด'."""
+    out = []
+    for key, rk in ranks[h].loc[t].dropna().sort_values(ascending=False).items():
+        if rk < 0.6 or len(out) >= n:
+            break
+        if key == "dist_high" and r["dist_high"] <= -0.05:
+            continue
+        if key == "cheap_fpe" and reason_text(key, t, r, f, sec_pe) is None:
+            continue
+        if key == "rating" and reason_text(key, t, r, f, sec_pe) is None:
+            continue
+        ph = SHORT_PHRASE.get(key)
+        if ph and ph not in out:
+            out.append(ph)
+    return " ".join(out) or "คะแนนรวมสูง"
+
+
+def icons(warns: list[str]) -> list[tuple[str, str]]:
+    return [(ic, lbl) for key, ic, lbl in ICONS if any(w.startswith(key) for w in warns)]
+
+
+def assign_horizons(scores: pd.DataFrame, n: int) -> dict[str, list[str]]:
+    """Each stock appears once, in the horizon where it ranks best (greedy by score)."""
+    triples = sorted(((sc, t, h) for h, _ in HORIZONS for t, sc in scores[h].dropna().items()), reverse=True)
+    tops, used = {h: [] for h, _ in HORIZONS}, set()
+    for sc, t, h in triples:
+        if t not in used and len(tops[h]) < n:
+            tops[h].append(t)
+            used.add(t)
+    return tops
+
+
 def reasons(h: str, t: str, ranks: dict, r, f, sec_pe, n: int = 2) -> list[str]:
     row = ranks[h].loc[t].dropna().sort_values(ascending=False)
     out = []
@@ -132,30 +176,24 @@ def build(scores, fund, universe, close, bench, bt, cfg, heatmap_path: str | Non
     # --- market line
     spy = bench[bench.columns[0]].dropna()
     up = spy.iloc[-1] > spy.rolling(200).mean().iloc[-1]
-    m1 = " · ".join(f"{c} {pct(bench[c].dropna().iloc[-1] / bench[c].dropna().iloc[-22] - 1, 1)}"
-                    for c in bench.columns)
-    lines = [f"<b>🇺🇸 หุ้นเด่นเช้านี้</b> · ปิดตลาด {thdate(asof, True)}",
-             f"ตลาด: {'🟢 ขาขึ้น' if up else '🔴 ขาลง'} · 1 เดือน {m1}"]
+    lines = [f"<b>🇺🇸 หุ้นเด่น {thdate(asof)}</b> · ตลาด {'🟢 ขาขึ้น' if up else '🔴 ขาลง'}"]
     if not up:
-        lines.append("<i>ตลาดอยู่ใต้เส้น 200 วัน — ในอดีตเกณฑ์ระยะสั้นทำได้แย่กว่า SPY ช่วงแบบนี้</i>")
+        lines.append("<i>ตลาดขาลง — ในอดีตเกณฑ์ระยะสั้นแพ้ SPY ช่วงแบบนี้</i>")
 
-    tops = {}
+    tops = assign_horizons(scores, n)
+    used_icons = {}
     for h, title in HORIZONS:
-        top = scores[h].dropna().nlargest(n).index.tolist()
-        tops[h] = top
-        lines += ["", f"<b>{title}</b>"]
-        for t in top:
+        lines += ["", f"<b>{title.replace('ระยะ', '').replace(' · ', ' ')}</b>"]
+        for t in tops[h]:
             r, f = scores.loc[t], fund.loc[t] if t in fund.index else empty
-            why = reasons(h, t, ranks, r, f, sec_pe)
-            warn = warnings(h, r, f, today, vol.get(t))
-            light = "🟡" if warn else "🟢"
-            text = " · ".join(why) if why else "คะแนนรวมสูง"
-            if warn:
-                text += " · ⚠️" + ", ".join(warn)
-            lines.append(f"{light} <b>{escape(t)}</b> <i>{SECTOR_SHORT.get(r['sector'], escape(str(r['sector'])))}</i> — {escape(text)}")
-    lines += ["", "🟢 ไม่มีจุดต้องระวัง · 🟡 มีข้อควรระวัง",
-              "<i>เทียบกับหุ้น S&amp;P 500 + Nasdaq-100 ด้วยกัน · ข้อมูล Yahoo Finance · "
-              "ใช้ประกอบการตัดสินใจ ไม่ใช่คำแนะนำการลงทุน</i>"]
+            ics = icons(warnings(h, r, f, today, vol.get(t)))
+            used_icons.update(dict(ics))
+            mark = (" " + "".join(ic for ic, _ in ics)) if ics else ""
+            lines.append(f"<code>{escape(t):<5}</code> {escape(short_reason(h, t, ranks, r, f, sec_pe))}{mark}")
+    lines.append("")
+    if used_icons:
+        lines.append(" ".join(f"{ic}{lbl}" for ic, lbl in used_icons.items()))
+    lines.append("<i>ไม่ใช่คำแนะนำการลงทุน · รายละเอียดตัวอันดับ 1 ด้านล่าง</i>")
     msgs = [{"text": "\n".join(lines)}]
 
     if heatmap_path:

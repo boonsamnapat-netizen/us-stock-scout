@@ -94,7 +94,9 @@ def test_brief_messages(tmp_path):
     for t in texts:
         assert len(t) <= telegram.LIMIT
         assert _html_balanced(t)
-    assert texts[0].count("<b>T") == 15         # 5 per horizon
+    assert texts[0].count("<code>T") == 15      # 5 per horizon
+    tickers = [ln.split("</code>")[0][6:].strip() for ln in texts[0].splitlines() if ln.startswith("<code>")]
+    assert len(set(tickers)) == 15              # no stock repeated across horizons
 
 
 def test_grades():
