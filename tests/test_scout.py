@@ -393,17 +393,22 @@ def test_bot_main_owner_only(tmp_path, monkeypatch):
 def test_track_record_and_report(tmp_path):
     import numpy as np
     from scout import track
-    idx = pd.bdate_range("2026-01-01", periods=120)
-    close = pd.DataFrame({"A": np.linspace(100, 150, 120), "B": np.linspace(100, 90, 120),
-                          "C": np.full(120, 100.0)}, index=idx)
-    spy = pd.Series(np.linspace(100, 110, 120), index=idx)
-    h = track.record(str(tmp_path / "h.csv"), idx[10], {"pullback": ["A", "B"], "top": ["C"], "emerging": []})
-    h = track.record(str(tmp_path / "h.csv"), idx[10], {"pullback": ["A"], "top": [], "emerging": []})   # same week replaced
-    assert list(h["ticker"]) == ["A"]
-    perf = track.performance(h, close, spy)
-    entry, last = idx[11], idx[-1]
-    assert abs(perf.iloc[0]["ret"] - (close.at[last, "A"] / close.at[entry, "A"] - 1)) < 1e-12   # next-day entry
+    idx = pd.bdate_range("2026-01-01", periods=200)
+    close = pd.DataFrame({"A": np.linspace(100, 150, 200), "B": np.linspace(100, 90, 200),
+                          "C": np.full(200, 100.0), "NA": np.full(200, 50.0)}, index=idx)
+    spy = pd.Series(np.linspace(100, 110, 200), index=idx)
+    path = str(tmp_path / "h.csv")
+    track.record(path, idx[10], {"pullback": ["A", "B"], "top": ["C"], "emerging": []})
+    h = track.record(path, idx[10], {"pullback": ["A", "B", "GONE"], "top": ["NA"], "emerging": []})  # same week
+    assert sorted(h["ticker"]) == ["A", "B", "GONE", "NA"]          # replaced, and "NA" kept as a ticker
+    co, missing = track.cohorts(h, close, spy)
+    assert missing == 1                                              # GONE has no price -> counted, not hidden
+    e = 11                                                           # first close after the report date
+    pb4 = co[(co.section == "pullback") & (co.horizon == "4 สัปดาห์")].iloc[0]
+    exp = np.mean([close["A"].iloc[e + 20] / close["A"].iloc[e] - 1, close["B"].iloc[e + 20] / close["B"].iloc[e] - 1])
+    assert abs(pb4["ret"] - exp) < 1e-12 and pb4["n"] == 2
+    assert set(co["horizon"]) == {"4 สัปดาห์", "13 สัปดาห์", "26 สัปดาห์"} or len(close) - e - 1 < 126
     txt = track.report_text(h, close, spy)
-    assert "🔄" in txt and _html_balanced(txt)
-    empty = track.report_text(track.record(str(tmp_path / "h2.csv"), idx[-2], {"top": ["A"]}), close, spy)
-    assert "จะเริ่มแสดงผล" in empty
+    assert "ไม่มีราคา" in txt and _html_balanced(txt)
+    young = track.report_text(track.record(str(tmp_path / "h2.csv"), idx[-3], {"top": ["A"]}), close, spy)
+    assert "ครบ 4 สัปดาห์" in young

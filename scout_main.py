@@ -42,6 +42,7 @@ def main(argv=None) -> int:
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
     if a.demo:
         universe, close, volume, bench, fund = data.demo_data(n=120, years=3)
+        close_track = close
         fund["industry"] = [f"Industry {i % 15}" for i in range(len(fund))]
         est = estimates.demo(close.columns)
         spy = bench["SPY"]
@@ -51,10 +52,13 @@ def main(argv=None) -> int:
                          else uni.load_universe(cfg, str(BASE)))
         print(f"[scout] universe {len(universe)} ({src})")
         tickers = universe["ticker"].tolist()[: a.limit or None]
-        close_all, volume = data.fetch_prices(tickers + ["SPY"], 3)
+        # also price every past pick (even if it left the index) so the track record has no survivorship
+        past = [t for t in track.load(str(BASE / HISTORY_FILE))["ticker"].unique() if t not in tickers]
+        close_all, volume = data.fetch_prices(tickers + past + ["SPY"], 3)
         spy = close_all["SPY"]
-        close = close_all.drop(columns=["SPY"])
-        volume = volume.drop(columns=["SPY"], errors="ignore")
+        close_track = close_all.drop(columns=["SPY"])
+        close = close_track.drop(columns=[t for t in past if t in close_track.columns])
+        volume = volume.reindex(columns=close.columns)
         if a.skip_stale and (datetime.now(timezone.utc).date() - close.index[-1].date()).days > 3:
             print(f"[scout] latest bar {close.index[-1].date()} is stale -> skip")
             return 0
@@ -117,8 +121,14 @@ def main(argv=None) -> int:
             state["weekly_week"] = week
         messages += msgs
         hist_path = BASE / HISTORY_FILE if not (a.demo or a.limit) else out / "scout_history_test.csv"
-        hist = track.record(str(hist_path), asof, msgs[-1]["picks"])
-        messages.append({"text": track.report_text(hist, close, spy)})
+        try:
+            # only automatic weekly runs create cohorts (manual re-runs must not add extra "weeks")
+            hist = (track.record(str(hist_path), asof, msgs[-1]["picks"]) if a.mode == "auto" or a.demo
+                    else track.load(str(hist_path)))
+            messages.append({"text": track.report_text(hist, close_track, spy)})
+        except Exception as e:                       # never lose the weekly report because of the record
+            print(f"[scout] track record failed: {e!r}")
+            messages.append({"text": "📒 ผลงานจริงของ Scout: คำนวณไม่สำเร็จรอบนี้ (จะลองใหม่สัปดาห์หน้า)"})
         scores = pd.DataFrame({"sector": universe.set_index("ticker")["sector"].reindex(close.columns).fillna("Unknown"),
                                "mom_1m": close.iloc[-1] / close.iloc[-22] - 1})
         hm = heatmap.sector_heatmap(scores, fund, str(out / f"heatmap_{asof:%Y-%m-%d}.png"), asof)

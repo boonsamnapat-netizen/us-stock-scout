@@ -57,7 +57,7 @@ jobs:
           for f in data/scout_state.json data/scout_history.csv; do [ -f "$f" ] && git add "$f"; done; true
           git diff --cached --quiet && exit 0
           git commit -m "scout state: $(date -u +%F)"
-          git pull --rebase origin main && git push origin HEAD:main
+          for i in 1 2 3; do git pull --rebase origin main && git push origin HEAD:main && break; sleep 5; done
       - uses: actions/upload-artifact@v4
         if: always()
         with:

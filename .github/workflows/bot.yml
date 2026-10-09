@@ -24,7 +24,10 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
           OFF=$(python3 -c "import json,os;p='data/bot_state.json';print(json.load(open(p))['offset']+1 if os.path.exists(p) else 0)")
-          N=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${OFF}&timeout=0" | python3 -c "import json,sys;print(len(json.load(sys.stdin).get('result',[])))")
+          BODY=$(curl -s --max-time 20 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${OFF}&timeout=0") || {
+            echo "::warning::Telegram unreachable (network) — will retry next run"; echo "new=0" >> "$GITHUB_OUTPUT"; exit 0; }
+          # a Telegram error (401 revoked token, 409 webhook set, ...) must FAIL loudly, not look like "no messages"
+          N=$(printf '%s' "$BODY" | python3 -c "import json,sys;d=json.load(sys.stdin);print(len(d['result'])) if d.get('ok') else sys.exit('Telegram error %s: %s' % (d.get('error_code'), d.get('description')))")
           echo "new=$N" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v5
         if: steps.peek.outputs.new != '0'
@@ -47,4 +50,4 @@ jobs:
           [ -f data/bot_state.json ] && git add data/bot_state.json
           git diff --cached --quiet && exit 0
           git commit -m "bot offset"
-          git pull --rebase origin main && git push origin HEAD:main
+          for i in 1 2 3; do git pull --rebase origin main && git push origin HEAD:main && break; sleep 5; done

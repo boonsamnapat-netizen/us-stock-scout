@@ -117,13 +117,13 @@ def main() -> int:
             try:
                 replies.append(check_card(t, watch))
             except Exception as e:                      # never lose the offset because of one ticker
-                print(f"[bot] {t}: {e!r}")
+                print(f"[bot] {t}: {type(e).__name__}")         # no URL (could contain the token)
                 replies.append({"text": f"⚠️ ดึงข้อมูล {sr.escape(t)} ไม่สำเร็จ ลองใหม่ภายหลัง"})
     for rep in replies:                                 # one bad message must not block the others
         try:
             telegram.send(token, chat, [rep])
         except Exception as e:
-            print(f"[bot] send failed: {e!r}")
+            print(f"[bot] send failed: {type(e).__name__}")
             try:
                 telegram.send(token, chat, [{"text": "⚠️ ส่งการ์ดไม่สำเร็จ (รูปแบบข้อความผิดพลาด)", "plain": True}])
             except Exception:
