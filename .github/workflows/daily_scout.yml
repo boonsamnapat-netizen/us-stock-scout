@@ -1,0 +1,49 @@
+name: Daily US Stock Scout
+
+on:
+  schedule:
+    # 23:15 UTC Mon–Fri = after US close (both EDT/EST) = 06:15 Thai time Tue–Sat
+    - cron: "15 23 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      notify:
+        description: "Send to Telegram"
+        type: boolean
+        default: true
+      limit:
+        description: "Only first N tickers (0 = all) — for quick tests"
+        default: "0"
+
+permissions:
+  contents: read
+
+jobs:
+  scout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q tests
+      - name: Scan + report
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          ARGS=""
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            ARGS="--notify --skip-stale"
+          elif [ "${{ inputs.notify }}" = "true" ]; then
+            ARGS="--notify"
+          fi
+          python scout_run.py $ARGS --limit "${{ inputs.limit || '0' }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scout-output
+          path: output/
+          retention-days: 30

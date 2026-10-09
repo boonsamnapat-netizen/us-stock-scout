@@ -1,0 +1,27 @@
+# US Stock Scout — config
+# ทุกค่าที่มีป้าย ASSUMPTION = ค่าตั้งต้นที่ยังไม่ได้ยืนยันกับเจ้าของ ให้แก้เป็นค่าจริง
+
+universe:
+  snapshot: data/universe.csv     # สำรองไว้ใช้ถ้าดึง Wikipedia ไม่ได้
+  refresh_from_wikipedia: true    # S&P 500 + Nasdaq-100 ล่าสุดทุกครั้งที่รัน
+
+benchmark: SPY
+extra_benchmarks: [QQQ]
+history_years: 6                  # ราคาย้อนหลัง (ใช้ทั้งคำนวณและทดสอบย้อนหลัง)
+
+fees:
+  # ASSUMPTION: ต้นทุนต่อขา (ค่าคอม + ส่วนต่างค่าเงิน) เป็น % — ใส่ค่าจริงของ Dime ที่คุณจ่าย
+  per_side_pct: 0.10
+
+short:                            # ระยะสั้น = ถือ ~4 สัปดาห์
+  horizon_days: 20                # 20 วันทำการ ≈ 4 สัปดาห์
+
+report:
+  top_n: 10                       # จำนวนหุ้นต่อระยะ
+  per_sector: 2                   # หุ้นเด่นต่ออุตสาหกรรม
+  detail_n: 3                     # วิเคราะห์ละเอียดกี่ตัวต่อระยะ
+  min_analysts: 5                 # ใช้ราคาเป้าเฉพาะหุ้นที่นักวิเคราะห์ >= เท่านี้
+
+backtest:
+  top_n: 10
+  min_history_days: 273           # ต้องมีราคา >= 1 ปี + 1 เดือนก่อนเริ่มทดสอบ
