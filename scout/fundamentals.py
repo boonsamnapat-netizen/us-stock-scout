@@ -25,7 +25,7 @@ CONCEPTS = {
 
 
 def cik_map(session: requests.Session) -> dict[str, int]:
-    r = session.get(TICKERS_URL, headers=UA, timeout=30)
+    r = _get(session, TICKERS_URL)
     print(f"[edgar] company_tickers.json -> HTTP {r.status_code}, {len(r.content)} bytes, "
           f"type {r.headers.get('content-type')}")
     if r.status_code != 200 or "json" not in r.headers.get("content-type", ""):
@@ -120,7 +120,18 @@ def to_panel(per_ticker: dict[str, pd.DataFrame], col: str, dates: pd.DatetimeIn
     return pd.DataFrame(out, index=dates)
 
 
-def fetch_all(tickers: list[str], pause: float = 0.12) -> dict[str, dict[str, pd.DataFrame]]:
+def _get(session: requests.Session, url: str, tries: int = 4, wait: float = 60.0) -> requests.Response:
+    """GET with back-off on SEC's 403 'Request Rate Threshold Exceeded' / 429."""
+    for k in range(tries):
+        r = session.get(url, headers=UA, timeout=60)
+        if r.status_code not in (403, 429) or k == tries - 1:
+            return r
+        print(f"[edgar] HTTP {r.status_code} on {url.rsplit('/', 1)[-1]} — waiting {wait * (k + 1):.0f}s")
+        time.sleep(wait * (k + 1))
+    return r
+
+
+def fetch_all(tickers: list[str], pause: float = 0.25) -> dict[str, dict[str, pd.DataFrame]]:
     """{ticker: {'revenue': signals, 'net_income': signals}} — run where sec.gov is reachable."""
     s = requests.Session()
     ciks = cik_map(s)
@@ -135,7 +146,7 @@ def fetch_all(tickers: list[str], pause: float = 0.12) -> dict[str, dict[str, pd
             missing.append(t)
             continue
         try:
-            r = s.get(FACTS_URL.format(cik=cik), headers=UA, timeout=60)
+            r = _get(s, FACTS_URL.format(cik=cik), tries=2, wait=30.0)
             if first:
                 print(f"[edgar] first companyfacts ({t}) -> HTTP {r.status_code}: {r.text[:200]!r}"
                       if r.status_code != 200 else f"[edgar] first companyfacts ({t}) OK")
@@ -150,6 +161,8 @@ def fetch_all(tickers: list[str], pause: float = 0.12) -> dict[str, dict[str, pd
             missing.append(t)
         time.sleep(pause)
     print(f"[edgar] fundamentals for {len(out)}/{len(tickers)} tickers; missing {len(missing)}")
+    if len(out) < 0.5 * len(tickers):
+        raise RuntimeError(f"EDGAR coverage too low ({len(out)}/{len(tickers)}) — results would be meaningless")
     return out
 
 
