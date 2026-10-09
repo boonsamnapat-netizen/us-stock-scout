@@ -31,13 +31,16 @@ def main():
         volume = volume.drop(columns=["SPY"], errors="ignore")
         print(f"universe {close.shape[1]} ({src}) {close.index[0].date()} → {close.index[-1].date()}")
     p = stages.stage_panels(close, volume)
+    p2 = stages.stage_panels_v2(close, volume)
     rows = []
     for h, name in ((63, "3m"), (126, "6m"), (252, "12m")):
         fwd = close.shift(-h) / close - 1
         spy_fwd = spy.reindex(close.index).shift(-h) / spy.reindex(close.index) - 1
         idx = range(300, len(close) - h, 21)
-        for label, mask in (("🚀 breakout", p["breakout"]), ("🔄 pullback", p["pullback"]),
-                            ("📈 uptrend", p["uptrend"]), ("all stocks", close.notna())):
+        for label, mask in (("🚀 v1 breakout", p["breakout"]), ("🚀 v2 breakout (book)", p2["breakout2"]),
+                            ("🔄 v1 pullback", p["pullback"]), ("🔄 v2 throwback (book)", p2["throwback"]),
+                            ("Trend Template", p2["template"]), ("📈 v1 uptrend", p["uptrend"]),
+                            ("all stocks", close.notna())):
             r, ex, n = [], [], 0
             for i in idx:
                 m = mask.iloc[i].fillna(False).astype(bool)

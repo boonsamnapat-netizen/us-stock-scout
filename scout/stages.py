@@ -77,3 +77,43 @@ def group_strength(close: pd.DataFrame, industry: pd.Series, spy: pd.Series, min
     before = snapshot(-lookback)
     now["rank_change"] = (before["rank"].reindex(now.index) - now["rank"])
     return now.sort_values("rank")
+
+
+# ---------------------------------------------------------------- v2: book-based definitions
+# Sources (secondary; see research notes): Minervini Trend Template; IBD pivot/buy range/volume;
+# O'Neil min base length & depth; Weinstein throwback. Windows marked (choice) are ours, not the books'.
+def trend_template(close: pd.DataFrame, rs_min: float = 0.70) -> pd.DataFrame:
+    s50, s150, s200 = (close.rolling(n, min_periods=n).mean() for n in (50, 150, 200))
+    lo52 = close.rolling(252, min_periods=200).min()
+    hi52 = close.rolling(252, min_periods=200).max()
+    rs = (close / close.shift(252) - 1).rank(axis=1, pct=True)        # proxy for IBD RS rating
+    return ((close > s150) & (close > s200) & (s150 > s200) & (s200 > s200.shift(22))
+            & (s50 > s150) & (s50 > s200) & (close > s50)
+            & (close >= 1.30 * lo52) & (close >= 0.75 * hi52) & (rs >= rs_min))
+
+
+def stage_panels_v2(close: pd.DataFrame, volume: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    vol = volume.reindex_like(close)
+    vol50 = vol.rolling(50, min_periods=50).mean()
+    tt = trend_template(close)
+    base_hi = close.shift(1).rolling(35, min_periods=35).max()           # 7-week base (O'Neil)
+    base_lo = close.shift(1).rolling(35, min_periods=35).min()
+    depth_ok = (base_hi - base_lo) / base_hi <= 0.33                     # cup depth limit (O'Neil)
+    pivot = base_hi + 0.10                                               # IBD pivot
+    sig = (tt & depth_ok & (close > pivot) & (close <= pivot * 1.05)    # IBD 5% buy range
+           & (vol >= 1.4 * vol50))                                       # IBD +40% volume
+    piv_recent = pivot.where(sig).ffill(limit=4)                         # signal in last 5 days (choice)
+    recent = sig.astype(float).rolling(5, min_periods=1).max() > 0
+    breakout = recent & (close <= piv_recent * 1.05) & (close >= piv_recent * 0.97)
+
+    s50 = close.rolling(50, min_periods=50).mean()
+    s150 = close.rolling(150, min_periods=150).mean()
+    s200 = close.rolling(200, min_periods=200).mean()
+    piv40 = pivot.where(sig).ffill(limit=40)                             # breakout in last 40 days (choice)
+    support = np.maximum(piv40, s50)
+    vol5 = vol.rolling(5, min_periods=5).mean()
+    throwback = (piv40.notna() & ~recent & (close > s150) & (s150 > s200)
+                 & (close <= support * 1.03) & (close >= piv40 * 0.97)    # 3% tolerance (choice)
+                 & (vol5 < vol50))                                        # lighter volume
+    return {"breakout2": breakout.fillna(False), "throwback": throwback.fillna(False),
+            "template": tt.fillna(False), "breakout2_day": sig.fillna(False)}
