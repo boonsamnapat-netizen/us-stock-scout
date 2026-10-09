@@ -1,0 +1,50 @@
+name: Telegram bot (/check)
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"     # GitHub may delay scheduled runs; replies are not instant
+  workflow_dispatch:
+
+permissions:
+  contents: write              # commit data/bot_state.json (update offset)
+
+concurrency:
+  group: telegram-bot
+  cancel-in-progress: false
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Any new messages?
+        id: peek
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          OFF=$(python3 -c "import json,os;p='data/bot_state.json';print(json.load(open(p))['offset']+1 if os.path.exists(p) else 0)")
+          N=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${OFF}&timeout=0" | python3 -c "import json,sys;print(len(json.load(sys.stdin).get('result',[])))")
+          echo "new=$N" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5
+        if: steps.peek.outputs.new != '0'
+        with:
+          python-version: "3.12"
+          cache: pip
+      - if: steps.peek.outputs.new != '0'
+        run: pip install -r requirements.txt
+      - name: Answer commands
+        if: steps.peek.outputs.new != '0'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -u bot.py
+      - name: Save offset
+        if: steps.peek.outputs.new != '0'
+        run: |
+          git config user.name "scout-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          [ -f data/bot_state.json ] && git add data/bot_state.json
+          git diff --cached --quiet && exit 0
+          git commit -m "bot offset"
+          git pull --rebase origin main && git push origin HEAD:main

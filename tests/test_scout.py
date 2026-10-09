@@ -343,3 +343,67 @@ def test_stage_gap_and_base_rules():
     vol.iloc[-1] = 3e6
     p2 = stages.stage_panels_v2(close, vol)
     assert not p2["breakout2_day"].iloc[-1].any()
+
+
+def test_bot_parse():
+    import bot
+    assert bot.parse("/check tsla") == ("check", ["TSLA"])
+    assert bot.parse("/check@napat_us_scout_bot NVDA, amd brk.b mu") == ("check", ["NVDA", "AMD", "BRK-B"])
+    assert bot.parse("/check") == ("help", [])
+    assert bot.parse("/check <script>") == ("help", [])
+    assert bot.parse("hello") == ("none", [])
+    assert bot.parse("/start")[0] == "help"
+
+
+def test_bot_main_owner_only(tmp_path, monkeypatch):
+    import json
+    import bot
+    from scout import data as d, estimates as es
+    u, close, vol, bench, fund = d.demo_data(n=10, years=3)
+    t = close.columns[0]
+
+    def fake_prices(tickers, years):
+        c = close.reindex(columns=[x for x in tickers if x in close.columns]).copy()
+        c["SPY"] = bench["SPY"]
+        return c, vol.reindex(columns=c.columns).fillna(1e6)
+    monkeypatch.setattr(d, "fetch_prices", fake_prices)
+    monkeypatch.setattr(d, "fetch_fundamentals", lambda ts: fund.reindex(ts))
+    monkeypatch.setattr(es, "fetch", lambda ts: es.demo(ts))
+    monkeypatch.setattr(bot, "BOT_STATE", tmp_path / "bot_state.json")
+    monkeypatch.setattr(bot, "SCOUT_STATE", tmp_path / "none.json")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "x")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "111")
+    updates = [{"update_id": 5, "message": {"chat": {"id": 111}, "text": f"/check {t} ZZZZ"}},
+               {"update_id": 6, "message": {"chat": {"id": 999}, "text": f"/check {t}"}}]   # stranger
+
+    class R:
+        def raise_for_status(self): pass
+        def json(self): return {"result": updates}
+    monkeypatch.setattr(bot.requests, "get", lambda *a, **k: R())
+    sent = []
+    monkeypatch.setattr(bot.telegram, "send", lambda tok, chat, msgs: sent.extend(msgs))
+    assert bot.main() == 0
+    assert len(sent) == 2                                     # card for t + "not found" for ZZZZ; stranger ignored
+    assert t in sent[0]["text"] and "ZZZZ" in sent[1]["text"]
+    for m in sent:
+        assert _html_balanced(m["text"])
+    assert json.loads((tmp_path / "bot_state.json").read_text())["offset"] == 6
+
+
+def test_track_record_and_report(tmp_path):
+    import numpy as np
+    from scout import track
+    idx = pd.bdate_range("2026-01-01", periods=120)
+    close = pd.DataFrame({"A": np.linspace(100, 150, 120), "B": np.linspace(100, 90, 120),
+                          "C": np.full(120, 100.0)}, index=idx)
+    spy = pd.Series(np.linspace(100, 110, 120), index=idx)
+    h = track.record(str(tmp_path / "h.csv"), idx[10], {"pullback": ["A", "B"], "top": ["C"], "emerging": []})
+    h = track.record(str(tmp_path / "h.csv"), idx[10], {"pullback": ["A"], "top": [], "emerging": []})   # same week replaced
+    assert list(h["ticker"]) == ["A"]
+    perf = track.performance(h, close, spy)
+    entry, last = idx[11], idx[-1]
+    assert abs(perf.iloc[0]["ret"] - (close.at[last, "A"] / close.at[entry, "A"] - 1)) < 1e-12   # next-day entry
+    txt = track.report_text(h, close, spy)
+    assert "🔄" in txt and _html_balanced(txt)
+    empty = track.report_text(track.record(str(tmp_path / "h2.csv"), idx[-2], {"top": ["A"]}), close, spy)
+    assert "จะเริ่มแสดงผล" in empty

@@ -17,11 +17,12 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from scout import data, estimates, heatmap, scout_report as sr, stages, telegram, universe as uni
+from scout import data, estimates, heatmap, scout_report as sr, stages, telegram, track, universe as uni
 from scout.scoring import sector_medians
 
 BASE = Path(__file__).resolve().parent
 STATE_FILE = "data/scout_state.json"
+HISTORY_FILE = "data/scout_history.csv"
 
 
 def main(argv=None) -> int:
@@ -115,6 +116,9 @@ def main(argv=None) -> int:
         if a.mode == "auto":                       # manual weekly runs must not consume this week's report
             state["weekly_week"] = week
         messages += msgs
+        hist_path = BASE / HISTORY_FILE if not (a.demo or a.limit) else out / "scout_history_test.csv"
+        hist = track.record(str(hist_path), asof, msgs[-1]["picks"])
+        messages.append({"text": track.report_text(hist, close, spy)})
         scores = pd.DataFrame({"sector": universe.set_index("ticker")["sector"].reindex(close.columns).fillna("Unknown"),
                                "mom_1m": close.iloc[-1] / close.iloc[-22] - 1})
         hm = heatmap.sector_heatmap(scores, fund, str(out / f"heatmap_{asof:%Y-%m-%d}.png"), asof)

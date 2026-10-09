@@ -147,6 +147,7 @@ def weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, n=8, n
             "<i>รายชื่อให้ศึกษาต่อ ไม่ใช่คำแนะนำซื้อ · ข้อมูล Yahoo Finance · ประมาณการนักวิเคราะห์อาจผิด</i>"]
     msgs = [{"text": "\n".join(head + g_lines)}, {"text": "\n".join(s1 + s2 + s3 + foot).strip()}]
     tops = [p[0] for p in (p1, p2, p3) if p]
+    msgs[-1]["picks"] = {"pullback": p1, "top": p2, "emerging": p3}
     return msgs, tops
 
 

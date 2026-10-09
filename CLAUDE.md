@@ -33,6 +33,11 @@ Decision-support only; no profit guarantee — always quote honest, net-of-fees 
   universe, costs, NW t) showed breakouts underperform (12m −7…−9%, t≈−2), pullbacks ≈ noise (+0.7%)
   but beat chasing uptrends (~+7%). Weekly = 🔥 groups, 🔄 good+pullback, ✅ top good, 🌱 emerging;
   daily alerts only for watchlist stocks newly entering 🔄. Every report carries the HONESTY note.
+- Track record (owner asked, 2026-10-09): weekly picks appended to `data/scout_history.csv`
+  (`scout/track.py`); weekly report shows returns from the first close AFTER the report vs SPY and the
+  equal-weight universe. This forward record is the real test of the fundamentals/estimates parts.
+- `/check TICKER` bot (`bot.py`, workflow `bot.yml`, cron */15): owner's chat only; offset in
+  `data/bot_state.json` saved after replying; any US ticker; shows Scout gate checklist.
 - "Good" = profitable TTM + next-year EPS & revenue growth expected + estimates not cut.
   "🌱 Emerging" (owner asked Claude to decide): unprofitable but revenue ≥ +25% YoY, losses narrowing,
   analysts expect profit next year — always flagged high risk.

@@ -54,7 +54,7 @@ jobs:
         run: |
           git config user.name "scout-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/scout_state.json 2>/dev/null || exit 0
+          for f in data/scout_state.json data/scout_history.csv; do [ -f "$f" ] && git add "$f"; done; true
           git diff --cached --quiet && exit 0
           git commit -m "scout state: $(date -u +%F)"
           git pull --rebase origin main && git push origin HEAD:main
