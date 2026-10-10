@@ -45,15 +45,24 @@ def parse_earnings(ed: pd.DataFrame | None, today: pd.Timestamp) -> dict:
 
 
 def reaction(close: pd.Series, when: pd.Timestamp) -> float:
-    """Price move around a report: close of the trading day AFTER the report day vs close of the day
-    BEFORE it (covers both before-open and after-close reports). NaN if those closes don't exist yet."""
+    """Price move caused by a report. After the close (>= 16:00 ET): report-day close -> next close.
+    Before the open (< 10:00 ET): previous close -> report-day close. Unknown time (e.g. 00:00):
+    previous close -> next close (2 days). NaN if the needed closes don't exist yet."""
     p = close.dropna()
     day = when.normalize()
+    hour = when.hour + when.minute / 60
     before = p[p.index < day]
+    on = p[p.index == day]
     after = p[p.index > day]
-    if before.empty or after.empty:
+    if hour >= 16:
+        a, b = on, after
+    elif 0 < hour < 10:
+        a, b = before, on
+    else:
+        a, b = before, after
+    if a.empty or b.empty:
         return np.nan
-    return float(after.iloc[0] / before.iloc[-1] - 1)
+    return float(b.iloc[0] / a.iloc[-1] - 1)
 
 
 def parse_insiders(tx: pd.DataFrame | None, today: pd.Timestamp, days: int = 180) -> dict | None:
@@ -62,18 +71,21 @@ def parse_insiders(tx: pd.DataFrame | None, today: pd.Timestamp, days: int = 180
         return None
     df = tx.copy()
     df["date"] = pd.to_datetime(df.get("Start Date"), errors="coerce")
+    if df["date"].isna().all():
+        return None                                          # can't tell what happened when -> say nothing
     df = df[df["date"] >= today - pd.Timedelta(days=days)]
     text = df["Text"].fillna("").astype(str).str.strip()
     val = pd.to_numeric(df.get("Value"), errors="coerce").fillna(0)
     buy, sell = text.str.startswith("Purchase"), text.str.startswith("Sale")
-    return {"buy_n": int(buy.sum()), "buy_people": int(df.loc[buy, "Insider"].nunique()),
+    who = df["Insider"] if "Insider" in df.columns else pd.Series(index=df.index, dtype=object)
+    return {"buy_n": int(buy.sum()), "buy_people": max(int(who[buy].nunique()), int(buy.any())),
             "buy_val": float(val[buy].sum()), "sell_n": int(sell.sum()),
-            "sell_people": int(df.loc[sell, "Insider"].nunique()), "sell_val": float(val[sell].sum()),
+            "sell_people": max(int(who[sell].nunique()), int(sell.any())), "sell_val": float(val[sell].sum()),
             "days": days}
 
 
 # ------------------------------------------------------------------ fetching
-def fetch(tickers: list[str], today: pd.Timestamp, pause: float = 0.2) -> dict[str, dict]:
+def fetch(tickers: list[str], today: pd.Timestamp, pause: float = 0.2, insiders: bool = True) -> dict[str, dict]:
     import yfinance as yf
 
     out = {}
@@ -86,7 +98,7 @@ def fetch(tickers: list[str], today: pd.Timestamp, pause: float = 0.2) -> dict[s
             print(f"[events] {t} earnings: {type(e).__name__}")
             ev["earn"] = {"next": None, "reported": []}
         try:
-            ev["insider"] = parse_insiders(tk.insider_transactions, today)
+            ev["insider"] = parse_insiders(tk.insider_transactions, today) if insiders else None
         except Exception as e:
             print(f"[events] {t} insiders: {type(e).__name__}")
             ev["insider"] = None
@@ -103,7 +115,8 @@ def _money(x: float) -> str:
 def beat_text(q: dict) -> str:
     if not _ok(q["est"]):
         return f"EPS จริง {q['act']:.2f}"
-    tag = "ชนะคาด" if q["act"] > q["est"] else "ตรงคาด" if q["act"] == q["est"] else "แพ้คาด"
+    act, est = round(q["act"], 2), round(q["est"], 2)            # compare what is shown
+    tag = "ชนะคาด" if act > est else "ตรงคาด" if act == est else "แพ้คาด"
     return f"EPS จริง {q['act']:.2f} vs คาด {q['est']:.2f} ({tag})"
 
 
@@ -113,23 +126,23 @@ def card_lines(ev: dict | None, close: pd.Series) -> list[str]:
     lines = ["<b>งบ &amp; คนในบริษัท</b>"]
     e = ev.get("earn") or {}
     if e.get("next") is not None:
-        lines.append(f"• 📅 งบครั้งถัดไป {thdate(e['next'], True)}")
+        lines.append(f"• 📅 งบครั้งถัดไป {thdate(e['next'], True)} <i>(ตาม Yahoo อาจเลื่อน)</i>")
     rep = e.get("reported", [])[:4]
     rep_est = [q for q in rep if _ok(q["est"])]
     if rep:
         q = rep[0]
         r = reaction(close, q["date"])
         lines.append(f"• งบล่าสุด {thdate(q['date'])}: {beat_text(q)}"
-                     + (f" · หุ้น {r * 100:+.0f}% รอบวันงบ" if _ok(r) else ""))
+                     + (f" · หุ้น {r * 100:+.0f}% หลังงบ" if _ok(r) else ""))
     if len(rep_est) >= 2:
-        wins = sum(q["act"] > q["est"] for q in rep_est)
-        lines.append(f"• {len(rep_est)} ไตรมาสล่าสุด ชนะคาด {wins} ครั้ง")
+        wins = sum(round(q["act"], 2) > round(q["est"], 2) for q in rep_est)
+        lines.append(f"• ชนะคาด {wins} จาก {len(rep_est)} งบล่าสุด")
     ins = ev.get("insider")
     if ins is not None:
         if ins["buy_n"]:
-            lines.append(f"• 🟢 คนในซื้อหุ้นในตลาด {ins['buy_people']} คน ({_money(ins['buy_val'])}) ใน 6 เดือน")
+            lines.append(f"• 🟢 คนในซื้อหุ้นด้วยเงินตัวเอง {ins['buy_people']} คน ({_money(ins['buy_val'])}) ใน 6 เดือน")
         else:
-            lines.append("• คนในไม่ได้ซื้อหุ้นในตลาดใน 6 เดือน")
+            lines.append("• ไม่พบคนในซื้อหุ้นด้วยเงินตัวเองใน 6 เดือน (ตามข้อมูล Yahoo)")
         if ins["sell_n"]:
             lines.append(f"• คนในขาย {ins['sell_people']} คน ({_money(ins['sell_val'])}) "
                          "<i>— การขายมักเป็นเรื่องภาษี/ส่วนตัว การซื้อมีความหมายกว่า</i>")
@@ -143,12 +156,12 @@ def recap(asof: pd.Timestamp, items: list[tuple[str, dict, float, pd.Series]]) -
     lines = [f"<b>📊 สรุปงบหุ้นในรายชื่อเฝ้าดู · {thdate(asof)}</b>", ""]
     for t, q, r, e in items:
         lines.append(f"<b>{escape(t)}</b> ({thdate(q['date'])}) — {beat_text(q)}"
-                     + (f" · หุ้น {r * 100:+.0f}% รอบวันงบ" if _ok(r) else ""))
+                     + (f" · หุ้น {r * 100:+.0f}% หลังงบ" if _ok(r) else ""))
         if e is not None and _ok(e.get("eps_rev_30")):
             ud = (f" · ขึ้น {e['up30']:.0f} / ลง {e['down30']:.0f} คน"
                   if _ok(e.get("up30")) and _ok(e.get("down30")) else "")
             lines.append(f"   ประมาณการกำไรปีหน้าเปลี่ยนใน 30 วัน {e['eps_rev_30'] * 100:+.1f}%{ud}")
-    lines += ["", "<i>EPS ตามนิยามนักวิเคราะห์ (มักไม่ใช่ GAAP) · 'รอบวันงบ' = ปิดวันก่อนงบ → ปิดวันถัดไป · "
+    lines += ["", "<i>EPS ตามนิยามนักวิเคราะห์ (มักไม่ใช่ GAAP) · 'หลังงบ' = ราคาปิดก่อนงบ → ปิดแรกหลังงบ · "
               "นักวิเคราะห์มักปรับประมาณการภายในไม่กี่วันหลังงบ ดูต่อได้ด้วย /check</i>"]
     return {"text": "\n".join(lines)}
 
@@ -163,7 +176,8 @@ def calendar_lines(watch: list[str], fund: pd.DataFrame, today: pd.Timestamp, da
         if t in fund.index:
             d = next_earnings(fund.loc[t], today)
             if d is not None and (d - today).days <= days:
-                rows.append((d, t))
+                est = fund.loc[t].get("isEarningsDateEstimate")
+                rows.append((d, t + ("*" if _ok(est) and est else "")))
     if not rows:
         return []
     rows.sort()
@@ -174,4 +188,5 @@ def calendar_lines(watch: list[str], fund: pd.DataFrame, today: pd.Timestamp, da
     out += [f"• {thdate(d)}: {', '.join(escape(t) for t in ts)}" for d, ts in by_day.items()]
     if len(rows) > limit:
         out.append(f"<i>…และอีก {len(rows) - limit} ตัว</i>")
+    out.append("<i>วันที่ตาม Yahoo อาจเลื่อน · * = วันที่ยังเป็นการคาด</i>")
     return out

@@ -369,7 +369,7 @@ def test_bot_main_owner_only(tmp_path, monkeypatch):
     monkeypatch.setattr(d, "fetch_prices", fake_prices)
     monkeypatch.setattr(d, "fetch_fundamentals", lambda ts: fund.reindex(ts))
     monkeypatch.setattr(es, "fetch", lambda ts: es.demo(ts))
-    monkeypatch.setattr(bot.events, "fetch", lambda ts, today: {x: _fake_events(close.index[-30]) for x in ts})
+    monkeypatch.setattr(bot.events, "fetch", lambda ts, today, **k: {x: _fake_events(close.index[-30]) for x in ts})
     monkeypatch.setattr(bot, "BOT_STATE", tmp_path / "bot_state.json")
     monkeypatch.setattr(bot, "SCOUT_STATE", tmp_path / "none.json")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "x")
@@ -443,7 +443,7 @@ def test_events_parse_and_card_lines():
     assert abs(events.reaction(close, ev["earn"]["reported"][0]["date"]) - 0.10) < 1e-9
     assert np.isnan(events.reaction(close.loc[:day], ev["earn"]["reported"][0]["date"]))   # no close after yet
     txt = "\n".join(events.card_lines(ev, close))
-    assert "ชนะคาด" in txt and "+10%" in txt and "ชนะคาด 1 ครั้ง" in txt and "คนในซื้อ" in txt
+    assert "ชนะคาด" in txt and "+10%" in txt and "ชนะคาด 1 จาก 3" in txt and "คนในซื้อ" in txt
     assert _html_balanced(txt)
     r = "\n".join(risk.lines(pd.Series(np.r_[np.linspace(100, 200, 300), np.linspace(200, 100, 100)],
                                        index=pd.bdate_range("2024-01-01", periods=400))))
@@ -457,7 +457,7 @@ def test_earnings_recap_once_and_rolls_forward(monkeypatch):
     day = pd.Timestamp("2026-07-28")
     idx = pd.bdate_range("2026-01-01", "2026-08-05")
     close = pd.DataFrame({"AAA": np.where(idx > day, 110.0, 100.0)}, index=idx)
-    monkeypatch.setattr(scout_main.events, "fetch", lambda ts, today: {t: _fake_events(day) for t in ts})
+    monkeypatch.setattr(scout_main.events, "fetch", lambda ts, today, **k: {t: _fake_events(day) for t in ts})
     monkeypatch.setattr(scout_main.estimates, "fetch", lambda ts: scout_main.estimates.demo(ts))
     state = {"watch": {"AAA": {}}, "earn_next": {"AAA": "2026-07-28", "GONE": "2026-07-28"}}
     asof = close.index[-1]
@@ -478,3 +478,34 @@ def test_weekly_calendar_section():
     out = events.calendar_lines(["AAA", "BBB", "CCC"], fund, today)
     assert any("AAA" in x for x in out) and not any("BBB" in x for x in out)
     assert events.calendar_lines(["BBB"], fund, today) == []
+
+
+def test_events_edge_cases():
+    from scout import events, risk
+    idx = pd.bdate_range("2026-07-01", "2026-07-31")
+    close = pd.Series(100.0, index=idx)
+    close[close.index >= pd.Timestamp("2026-07-15")] = 120.0
+    close[close.index > pd.Timestamp("2026-07-15")] = 90.0
+    assert abs(events.reaction(close, pd.Timestamp("2026-07-15 08:00")) - 0.20) < 1e-9   # before open
+    assert abs(events.reaction(close, pd.Timestamp("2026-07-15 16:05")) + 0.25) < 1e-9   # after close
+    assert abs(events.reaction(close, pd.Timestamp("2026-07-15")) + 0.10) < 1e-9         # unknown time
+    q = {"date": pd.Timestamp("2026-07-15"), "act": 1.23, "est": 1.234}
+    assert "ตรงคาด" in events.beat_text(q)                  # tag matches the rounded numbers shown
+    tx = pd.DataFrame({"Value": [1e5], "Text": ["Purchase at price 1 per share."], "Insider": [np.nan],
+                       "Start Date": [pd.Timestamp("2026-07-10")]})
+    ins = events.parse_insiders(tx, pd.Timestamp("2026-07-20"))
+    assert ins["buy_people"] == 1
+    tx["Start Date"] = "garbage"
+    assert events.parse_insiders(tx, pd.Timestamp("2026-07-20")) is None
+    up = pd.Series(np.linspace(100, 200, 300), index=pd.bdate_range("2025-06-02", periods=300))
+    txt = "\n".join(risk.lines(up))
+    assert "ร่วงหนักสุด" not in txt and "วันแย่" not in txt and "1 ปีล่าสุด" in txt
+
+
+def test_weekly_refresh_keeps_pending_recap():
+    import scout_main
+    ts = int(pd.Timestamp("2026-10-27").timestamp())
+    fund = pd.DataFrame({"earningsTimestampStart": [ts, ts], "earningsTimestamp": [ts, ts]}, index=["AAA", "BBB"])
+    state = {"earn_next": {"AAA": "2026-07-28"}}              # reported, not yet recapped
+    scout_main.refresh_earn_next(state, ["AAA", "BBB"], fund, pd.Timestamp("2026-07-31"))
+    assert state["earn_next"] == {"AAA": "2026-07-28", "BBB": "2026-10-27"}

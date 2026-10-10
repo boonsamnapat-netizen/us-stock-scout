@@ -15,7 +15,7 @@ INFO_FIELDS = [
     "targetMeanPrice", "targetLowPrice", "targetHighPrice",
     "recommendationMean", "recommendationKey", "numberOfAnalystOpinions",
     "dividendYield", "beta", "earningsTimestamp", "earningsTimestampStart",
-    "trailingEps", "forwardEps",
+    "trailingEps", "forwardEps", "isEarningsDateEstimate",
 ]
 
 

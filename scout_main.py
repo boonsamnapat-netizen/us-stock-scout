@@ -34,6 +34,18 @@ def _safe(fn, default):
         return default
 
 
+def refresh_earn_next(state: dict, watch, fund: pd.DataFrame, asof: pd.Timestamp) -> None:
+    """Store each watchlist name's next report date (from .info). An entry whose date has already
+    passed is kept: it is still waiting for its recap (Yahoo may already show next quarter's date)."""
+    day = pd.Timestamp(asof.date())
+    cur = state.setdefault("earn_next", {})
+    for t in watch:
+        if t in fund.index and not (t in cur and pd.Timestamp(cur[t]) <= day):
+            d = next_earnings(fund.loc[t], day)
+            if d is not None:
+                cur[t] = str(d.date())
+
+
 def earnings_recap(state: dict, asof: pd.Timestamp, close: pd.DataFrame, window: int = 10) -> dict | None:
     """Watchlist names whose (stored) report date has passed: EPS vs estimate, price reaction, revisions.
     Each report is recapped once (state['earn_done']); dates older than `window` days are dropped."""
@@ -44,25 +56,27 @@ def earnings_recap(state: dict, asof: pd.Timestamp, close: pd.DataFrame, window:
     due = [t for t, d in nxt.items() if pd.Timestamp(d) < day]
     if not due:
         return None
-    ev = events.fetch(due, day)
+    ev = events.fetch(due, day, insiders=False)
     est = estimates.fetch(due)
-    items = []
+    items, nxt2, done2 = [], dict(nxt), dict(done)
     for t in due:
         rep = ev[t]["earn"]["reported"]
         q = rep[0] if rep else None
         fresh = q is not None and 0 < (day - q["date"].normalize()).days <= window
         if fresh:
-            if done.get(t) != str(q["date"].date()):
+            if done2.get(t) != str(q["date"].date()):
                 r = events.reaction(close[t], q["date"]) if t in close.columns else float("nan")
                 items.append((t, q, r, est.loc[t] if t in est.index else None))
-                done[t] = str(q["date"].date())
-            nxt.pop(t, None)
-        elif (day - pd.Timestamp(nxt[t])).days > window:
-            nxt.pop(t, None)                       # never found the report -> stop looking
+                done2[t] = str(q["date"].date())
+            nxt2.pop(t, None)
+        elif (day - pd.Timestamp(nxt2[t])).days > window:
+            nxt2.pop(t, None)                      # never found the report -> stop looking
         nxt_new = ev[t]["earn"]["next"]
-        if t not in nxt and nxt_new is not None and nxt_new.normalize() >= day:
-            nxt[t] = str(nxt_new.date())          # roll forward to the next report
-    return events.recap(asof, items)
+        if t not in nxt2 and nxt_new is not None and nxt_new.normalize() >= day:
+            nxt2[t] = str(nxt_new.date())         # roll forward to the next report
+    msg = events.recap(asof, items)                # build first: a failure here keeps the old state
+    state["earn_next"], state["earn_done"] = nxt2, done2
+    return msg
 
 
 def main(argv=None) -> int:
@@ -137,10 +151,7 @@ def main(argv=None) -> int:
         if coverage >= 0.70 or not state.get("watch"):
             state["watch"] = json.loads(watch.to_json(orient="index"))
             state["watch_date"] = str(asof.date())
-            today = pd.Timestamp(datetime.now(timezone.utc).date())
-            nxt = {t: next_earnings(fund.loc[t], today) for t in watch.index if t in fund.index}
-            state["earn_next"] = {**state.get("earn_next", {}),
-                                  **{t: str(d.date()) for t, d in nxt.items() if d is not None}}
+            _safe(lambda: refresh_earn_next(state, watch.index, fund, asof), None)
         else:
             print("[scout] coverage too low (Yahoo rate limit?) -> keeping the previous watchlist")
     else:
@@ -159,7 +170,7 @@ def main(argv=None) -> int:
         groups = stages.group_strength(close, fund["industry"], spy)
         new_pb = {t for t in cls.index if stage.get(t) == "pullback" and t in prev and prev[t] != "pullback"}
         today = pd.Timestamp(datetime.now(timezone.utc).date())
-        cal = events.calendar_lines(list(cls.index[cls["good"] | cls["emerging"]]), fund, today)
+        cal = _safe(lambda: events.calendar_lines(list(cls.index[cls["good"] | cls["emerging"]]), fund, today), [])
         msgs, tops = sr.weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, new=new_pb,
                                calendar=cal)
         for t in new_pb:

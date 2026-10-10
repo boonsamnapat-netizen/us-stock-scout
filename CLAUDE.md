@@ -36,6 +36,12 @@ Decision-support only; no profit guarantee — always quote honest, net-of-fees 
 - Track record (owner asked, 2026-10-09): weekly picks appended to `data/scout_history.csv`
   (`scout/track.py`); weekly report shows returns from the first close AFTER the report vs SPY and the
   equal-weight universe. This forward record is the real test of the fundamentals/estimates parts.
+- 2026-10-10 (owner chose "group 2"): cards (weekly top-3 + /check) show earnings (next date from
+  Yahoo, last EPS vs estimate, price move after the report, beat count), insider open-market buys/sales
+  (Form 4 'Purchase'/'Sale' only; awards/gifts/exercises ignored) and price-history risk (`scout/events.py`,
+  `scout/risk.py`). Weekly report lists watchlist names reporting within 7 days. Every run recaps watchlist
+  reports once (`earnings_recap`, state `earn_next`/`earn_done`, 10-day window). yfinance formats verified
+  by probe_estimates.py in Actions.
 - `/check TICKER` bot (`bot.py`, workflow `bot.yml`, cron */15): owner's chat only; offset in
   `data/bot_state.json` saved after replying; any US ticker; shows Scout gate checklist.
 - "Good" = profitable TTM + next-year EPS & revenue growth expected + estimates not cut.

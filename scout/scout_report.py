@@ -181,7 +181,12 @@ def card(t, cls, fund, est, stage, dd, close, sec_pe, ev=None) -> dict:
     ]
     if _ok(tgt):
         lines.append(f"🎯 เป้านักวิเคราะห์เฉลี่ย ${tgt:,.0f} ({pct(tgt / p.iloc[-1] - 1)})")
-    for extra in (events.card_lines(ev, p), risk.lines(p)):
+    for fn in (lambda: events.card_lines(ev, p), lambda: risk.lines(p)):
+        try:
+            extra = fn()
+        except Exception as ex:                      # extras must never cost us the card
+            print(f"[scout] card extra for {t} failed: {ex!r}")
+            extra = []
         if extra:
             lines += [""] + extra
     return {"text": "\n".join(lines),
