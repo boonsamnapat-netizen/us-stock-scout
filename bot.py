@@ -18,7 +18,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 
-from scout import data, estimates, scout_report as sr, stages, telegram
+from scout import data, estimates, events, scout_report as sr, stages, telegram
 
 BASE = Path(__file__).resolve().parent
 BOT_STATE = BASE / "data/bot_state.json"
@@ -76,7 +76,12 @@ def check_card(t: str, watch: dict) -> dict:
     row = watch.get(t, {})
     cls = pd.DataFrame({"good": [bool(row.get("good", False))], "emerging": [bool(row.get("emerging", False))]},
                        index=[t])
-    card = sr.card(t, cls, fund, est, stage, dd, close, pd.Series(dtype=float))
+    try:
+        ev = events.fetch([t], pd.Timestamp(close.index[-1].date())).get(t)
+    except Exception as e:
+        print(f"[bot] {t} events: {type(e).__name__}")
+        ev = None
+    card = sr.card(t, cls, fund, est, stage, dd, close, pd.Series(dtype=float), ev)
     status = ("📌 <b>อยู่ในรายชื่อเฝ้าดูของ Scout</b>" if in_watch
               else "📌 ไม่อยู่ในรายชื่อเฝ้าดูของ Scout (ณ รายงานสัปดาห์ล่าสุด)")
     lines = card["text"].split("\n")

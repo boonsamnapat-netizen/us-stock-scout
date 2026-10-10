@@ -17,12 +17,52 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from scout import data, estimates, heatmap, scout_report as sr, stages, telegram, track, universe as uni
+from scout import data, estimates, events, heatmap, scout_report as sr, stages, telegram, track, universe as uni
+from scout.report import next_earnings
 from scout.scoring import sector_medians
 
 BASE = Path(__file__).resolve().parent
 STATE_FILE = "data/scout_state.json"
 HISTORY_FILE = "data/scout_history.csv"
+
+
+def _safe(fn, default):
+    try:
+        return fn()
+    except Exception as e:                         # extras must never cost us the report
+        print(f"[scout] optional step failed: {e!r}")
+        return default
+
+
+def earnings_recap(state: dict, asof: pd.Timestamp, close: pd.DataFrame, window: int = 10) -> dict | None:
+    """Watchlist names whose (stored) report date has passed: EPS vs estimate, price reaction, revisions.
+    Each report is recapped once (state['earn_done']); dates older than `window` days are dropped."""
+    day = pd.Timestamp(asof.date())
+    nxt, done = state.setdefault("earn_next", {}), state.setdefault("earn_done", {})
+    for t in [t for t in nxt if t not in state.get("watch", {})]:
+        nxt.pop(t)                                 # left the watchlist
+    due = [t for t, d in nxt.items() if pd.Timestamp(d) < day]
+    if not due:
+        return None
+    ev = events.fetch(due, day)
+    est = estimates.fetch(due)
+    items = []
+    for t in due:
+        rep = ev[t]["earn"]["reported"]
+        q = rep[0] if rep else None
+        fresh = q is not None and 0 < (day - q["date"].normalize()).days <= window
+        if fresh:
+            if done.get(t) != str(q["date"].date()):
+                r = events.reaction(close[t], q["date"]) if t in close.columns else float("nan")
+                items.append((t, q, r, est.loc[t] if t in est.index else None))
+                done[t] = str(q["date"].date())
+            nxt.pop(t, None)
+        elif (day - pd.Timestamp(nxt[t])).days > window:
+            nxt.pop(t, None)                       # never found the report -> stop looking
+        nxt_new = ev[t]["earn"]["next"]
+        if t not in nxt and nxt_new is not None and nxt_new.normalize() >= day:
+            nxt[t] = str(nxt_new.date())          # roll forward to the next report
+    return events.recap(asof, items)
 
 
 def main(argv=None) -> int:
@@ -97,6 +137,10 @@ def main(argv=None) -> int:
         if coverage >= 0.70 or not state.get("watch"):
             state["watch"] = json.loads(watch.to_json(orient="index"))
             state["watch_date"] = str(asof.date())
+            today = pd.Timestamp(datetime.now(timezone.utc).date())
+            nxt = {t: next_earnings(fund.loc[t], today) for t in watch.index if t in fund.index}
+            state["earn_next"] = {**state.get("earn_next", {}),
+                                  **{t: str(d.date()) for t, d in nxt.items() if d is not None}}
         else:
             print("[scout] coverage too low (Yahoo rate limit?) -> keeping the previous watchlist")
     else:
@@ -114,7 +158,10 @@ def main(argv=None) -> int:
     if mode == "weekly":
         groups = stages.group_strength(close, fund["industry"], spy)
         new_pb = {t for t in cls.index if stage.get(t) == "pullback" and t in prev and prev[t] != "pullback"}
-        msgs, tops = sr.weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, new=new_pb)
+        today = pd.Timestamp(datetime.now(timezone.utc).date())
+        cal = events.calendar_lines(list(cls.index[cls["good"] | cls["emerging"]]), fund, today)
+        msgs, tops = sr.weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, new=new_pb,
+                               calendar=cal)
         for t in new_pb:
             last_alert[t] = {"stage": "pullback", "date": str(asof.date())}
         if a.mode == "auto":                       # manual weekly runs must not consume this week's report
@@ -135,13 +182,19 @@ def main(argv=None) -> int:
         if hm:
             messages.append({"photo": hm, "caption": "🗺 แผนที่ตลาด 1 เดือน · ขนาด = มูลค่าบริษัท · เขียวขึ้น / แดงลง"})
         sec_pe = sector_medians(fund, fund["sector"].fillna("Unknown"), "forwardPE")
-        messages += [sr.card(t, cls, fund, est, stage, dd, close, sec_pe) for t in tops]
+        ev = {} if a.demo else _safe(lambda: events.fetch(tops, pd.Timestamp(asof.date())), {})
+        messages += [sr.card(t, cls, fund, est, stage, dd, close, sec_pe, ev.get(t)) for t in tops]
     elif len(cls):
         alert = sr.daily_alerts(asof, cls, fund, est, stage, prev, dd, close, last_alert)
         if alert:
             messages.append(alert)
             for t in alert.get("tickers", []):
                 last_alert[t] = {"stage": stage.get(t), "date": str(asof.date())}
+
+    if not a.demo:
+        rc = _safe(lambda: earnings_recap(state, asof, close), None)
+        if rc:
+            messages.append(rc)
 
     # merge (never drop tickers that failed to download today)
     state["stage"] = {**prev, **{k: v for k, v in stage.items() if k in close.columns and close[k].iloc[-1:].notna().all()}}

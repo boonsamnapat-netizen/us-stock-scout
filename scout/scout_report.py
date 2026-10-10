@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from .brief import SECTOR_SHORT, thdate
+from . import events, risk
 from .report import next_earnings
 
 STAGE_TH = {"breakout": "⬆️ ทำจุดสูงใหม่", "pullback": "🔄 ย่อในขาขึ้น", "uptrend": "📈 ขาขึ้น", "none": "–"}
@@ -109,7 +110,7 @@ def line(t, cls, fund, est, stage, dd, vol, today) -> str:
 
 
 # ------------------------------------------------------------------ messages
-def weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, n=8, new=frozenset()):
+def weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, n=8, new=frozenset(), calendar=()):
     today = pd.Timestamp(datetime.now(timezone.utc).date())
     vol = close.pct_change().iloc[-60:].std() * np.sqrt(252)
     up = spy.iloc[-1] > spy.rolling(200).mean().iloc[-1]
@@ -142,7 +143,7 @@ def weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, n=8, n
     rest = cls["good"] & ~cls.index.isin(p1)
     s2, p2 = section("✅ พื้นฐาน + ประมาณการดีที่สุด (ไม่ดูจังหวะกราฟ)", rest, n)
     s3, p3 = section("🌱 กำลังจะกำไร ⚠️เสี่ยงสูง (รายได้โตแรง ขาดทุนลดลง)", cls["emerging"], 5)
-    foot = ["", "🆕 เพิ่งเข้าโซนย่อสัปดาห์นี้ · 📅 งบออกใน 2 สัปดาห์ · 🎢 ผันผวนสูง · (เล็ก) มูลค่าบริษัท &lt; $3B",
+    foot = list(calendar) + ["", "🆕 เพิ่งเข้าโซนย่อสัปดาห์นี้ · 📅 งบออกใน 2 สัปดาห์ · 🎢 ผันผวนสูง · (เล็ก) มูลค่าบริษัท &lt; $3B",
             HONESTY,
             "<i>รายชื่อให้ศึกษาต่อ ไม่ใช่คำแนะนำซื้อ · ข้อมูล Yahoo Finance · ประมาณการนักวิเคราะห์อาจผิด</i>"]
     msgs = [{"text": "\n".join(head + g_lines)}, {"text": "\n".join(s1 + s2 + s3 + foot).strip()}]
@@ -151,7 +152,7 @@ def weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, n=8, n
     return msgs, tops
 
 
-def card(t, cls, fund, est, stage, dd, close, sec_pe) -> dict:
+def card(t, cls, fund, est, stage, dd, close, sec_pe, ev=None) -> dict:
     f, e = fund.loc[t], est.loc[t]
     p = close[t].dropna()
     tgt = f.get("targetMeanPrice")
@@ -180,6 +181,9 @@ def card(t, cls, fund, est, stage, dd, close, sec_pe) -> dict:
     ]
     if _ok(tgt):
         lines.append(f"🎯 เป้านักวิเคราะห์เฉลี่ย ${tgt:,.0f} ({pct(tgt / p.iloc[-1] - 1)})")
+    for extra in (events.card_lines(ev, p), risk.lines(p)):
+        if extra:
+            lines += [""] + extra
     return {"text": "\n".join(lines),
             "buttons": [[{"text": f"📈 กราฟ {t}", "url": f"https://finance.yahoo.com/quote/{t}"}]]}
 
