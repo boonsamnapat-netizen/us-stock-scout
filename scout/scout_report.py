@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from .brief import SECTOR_SHORT, thdate
-from . import events, risk
+from . import events, risk, stages
 from .report import next_earnings
 
 STAGE_TH = {"breakout": "⬆️ ทำจุดสูงใหม่", "pullback": "🔄 ย่อในขาขึ้น", "uptrend": "📈 ขาขึ้น", "none": "–"}
@@ -152,6 +152,16 @@ def weekly(asof, spy, close, fund, est, cls, stage, dd, groups, universe, n=8, n
     return msgs, tops
 
 
+def chart_lines(c: dict | None) -> list[str]:
+    if c is None:
+        return ["• กราฟ: ประวัติราคายังไม่ถึง ~1 ปี ประเมินขาขึ้นไม่ได้"]
+    m = lambda ok: "✅" if ok else "❌"
+    return [f"• กราฟ: {m(c['above200'])} ราคาเหนือเส้น 200 วัน · {m(c['sma200_up'])} เส้น 200 วันชี้ขึ้น · "
+            f"{m(c['s50_over_200'])} เส้น 50 วันเหนือเส้น 200 วัน · {m(c['in_zone'])} ย่อ 10–30% จากจุดสูงสุด "
+            f"(ตอนนี้ {c['dd'] * 100:.0f}%)",
+            "<i>🔄 ย่อในขาขึ้น = ผ่านครบ 4 ข้อ · 📈 ขาขึ้น = 3 ข้อแรก + ย่อไม่ถึง 10%</i>"]
+
+
 def card(t, cls, fund, est, stage, dd, close, sec_pe, ev=None) -> dict:
     f, e = fund.loc[t], est.loc[t]
     p = close[t].dropna()
@@ -175,12 +185,17 @@ def card(t, cls, fund, est, stage, dd, close, sec_pe, ev=None) -> dict:
         f"• อัตรากำไรจากธุรกิจ {upct(f.get('operatingMargins'))} · ROE {upct(f.get('returnOnEquity'))}",
         "",
         f"<b>ราคา</b> · ห่างจุดสูงสุด 1 ปี {pct(dd.get(t))} · Fwd P/E {f.get('forwardPE'):.1f}"
-        + (f" (กลุ่ม {sec_pe.get(f.get('sector')):.1f})" if _ok(sec_pe.get(f.get('sector'))) else "")
+        + (f" (ค่ากลางหมวด {escape(str(f.get('sector')))} {sec_pe.get(f.get('sector')):.1f})"
+           if _ok(sec_pe.get(f.get('sector'))) else "")
         if _ok(f.get("forwardPE")) and f.get("forwardPE") > 0
         else f"<b>ราคา</b> · ห่างจุดสูงสุด 1 ปี {pct(dd.get(t))} · Fwd P/E – (คาดว่าขาดทุน)",
     ]
     if _ok(tgt):
         lines.append(f"🎯 เป้านักวิเคราะห์เฉลี่ย ${tgt:,.0f} ({pct(tgt / p.iloc[-1] - 1)})")
+    try:
+        lines += chart_lines(stages.trend_checks(close[t]))
+    except Exception as ex:
+        print(f"[scout] chart checks for {t} failed: {ex!r}")
     for fn in (lambda: events.card_lines(ev, p), lambda: risk.lines(p)):
         try:
             extra = fn()

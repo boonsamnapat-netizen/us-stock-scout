@@ -371,7 +371,8 @@ def test_bot_main_owner_only(tmp_path, monkeypatch):
     monkeypatch.setattr(es, "fetch", lambda ts: es.demo(ts))
     monkeypatch.setattr(bot.events, "fetch", lambda ts, today, **k: {x: _fake_events(close.index[-30]) for x in ts})
     monkeypatch.setattr(bot, "BOT_STATE", tmp_path / "bot_state.json")
-    monkeypatch.setattr(bot, "SCOUT_STATE", tmp_path / "none.json")
+    (tmp_path / "scout.json").write_text(json.dumps({"watch": {}, "sector_pe": {str(fund.loc[t, "sector"]): 12.34}}))
+    monkeypatch.setattr(bot, "SCOUT_STATE", tmp_path / "scout.json")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "x")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "111")
     updates = [{"update_id": 5, "message": {"chat": {"id": 111}, "text": f"/check {t} ZZZZ"}},
@@ -386,6 +387,8 @@ def test_bot_main_owner_only(tmp_path, monkeypatch):
     assert bot.main() == 0
     assert len(sent) == 2                                     # card for t + "not found" for ZZZZ; stranger ignored
     assert t in sent[0]["text"] and "ZZZZ" in sent[1]["text"]
+    assert "12.3" in sent[0]["text"] or not (fund.loc[t, "forwardPE"] > 0)    # sector P/E from weekly state
+    assert "เส้น 200 วัน" in sent[0]["text"]
     for m in sent:
         assert _html_balanced(m["text"])
     assert json.loads((tmp_path / "bot_state.json").read_text())["offset"] == 6
@@ -509,3 +512,22 @@ def test_weekly_refresh_keeps_pending_recap():
     state = {"earn_next": {"AAA": "2026-07-28"}}              # reported, not yet recapped
     scout_main.refresh_earn_next(state, ["AAA", "BBB"], fund, pd.Timestamp("2026-07-31"))
     assert state["earn_next"] == {"AAA": "2026-07-28", "BBB": "2026-10-27"}
+
+
+def test_trend_checks_match_stage_and_card_shows_them():
+    from scout import scout_report as sr, stages
+    _, close, vol, _, fund = data.demo_data(n=30, years=3)
+    st = stages.stage_today(stages.stage_panels(close, vol))
+    for t in close.columns:
+        c = stages.trend_checks(close[t])
+        trend = c["above200"] and c["sma200_up"] and c["s50_over_200"]
+        if st[t] == "pullback":
+            assert trend and c["in_zone"]
+        elif st[t] == "uptrend":
+            assert trend and c["dd"] > -0.10
+        elif st[t] == "none":
+            assert not (trend and c["dd"] >= -0.30)
+    assert stages.trend_checks(close.iloc[-150:, 0]) is None
+    txt = "\n".join(sr.chart_lines(stages.trend_checks(close.iloc[:, 0])))
+    assert "เส้น 200 วัน" in txt and _html_balanced(txt)
+    assert "ไม่ถึง" in sr.chart_lines(None)[0]

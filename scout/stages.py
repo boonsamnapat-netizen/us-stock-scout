@@ -44,7 +44,8 @@ def stage_panels(close: pd.DataFrame, volume: pd.DataFrame | None = None) -> dic
     pullback = trend & (dd <= -0.10) & (dd >= -0.30) & ~breakout
     uptrend = trend & (dd > -0.10) & ~breakout
     return {"breakout": breakout, "pullback": pullback, "uptrend": uptrend, "dd": dd,
-            "sma200_up": sma200_up, "base_hi": base_hi}
+            "sma200_up": sma200_up, "base_hi": base_hi,
+            "above200": close > sma200, "s50_over_200": sma50 > sma200}
 
 
 def stage_today(panels: dict[str, pd.DataFrame]) -> pd.Series:
@@ -54,6 +55,18 @@ def stage_today(panels: dict[str, pd.DataFrame]) -> pd.Series:
     s[last["pullback"].fillna(False).astype(bool)] = "pullback"
     s[last["breakout"].fillna(False).astype(bool)] = "breakout"
     return s
+
+
+def trend_checks(close: pd.Series) -> dict | None:
+    """The chart conditions behind 🔄 / 📈 for one ticker (same definitions as stage_panels).
+    None = not enough history for a 200-day average."""
+    pn = stage_panels(close.to_frame("x"))
+    if pd.isna(pn["dd"]["x"].iloc[-1]) or close.dropna().shape[0] < 221:
+        return None
+    last = {k: pn[k]["x"].iloc[-1] for k in ("above200", "sma200_up", "s50_over_200", "dd")}
+    return {"above200": bool(last["above200"]), "sma200_up": bool(last["sma200_up"]),
+            "s50_over_200": bool(last["s50_over_200"]), "dd": float(last["dd"]),
+            "in_zone": bool(-0.30 <= last["dd"] <= -0.10)}
 
 
 def group_strength(close: pd.DataFrame, industry: pd.Series, spy: pd.Series, min_members: int = 3,

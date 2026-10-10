@@ -62,7 +62,7 @@ def gate_lines(fund: pd.DataFrame, est: pd.DataFrame, t: str) -> list[str]:
     ]
 
 
-def check_card(t: str, watch: dict) -> dict:
+def check_card(t: str, watch: dict, sector_pe: dict | None = None) -> dict:
     close_all, volume = data.fetch_prices([t, "SPY"], 3)
     if t not in close_all.columns or close_all[t].dropna().empty:
         return {"text": f"❓ ไม่พบข้อมูลราคาของ <b>{sr.escape(t)}</b> — ตรวจชื่อย่อหุ้นอีกครั้ง"}
@@ -81,7 +81,7 @@ def check_card(t: str, watch: dict) -> dict:
     except Exception as e:
         print(f"[bot] {t} events: {type(e).__name__}")
         ev = None
-    card = sr.card(t, cls, fund, est, stage, dd, close, pd.Series(dtype=float), ev)
+    card = sr.card(t, cls, fund, est, stage, dd, close, pd.Series(sector_pe or {}, dtype=float), ev)
     status = ("📌 <b>อยู่ในรายชื่อเฝ้าดูของ Scout</b>" if in_watch
               else "📌 ไม่อยู่ในรายชื่อเฝ้าดูของ Scout (ณ รายงานสัปดาห์ล่าสุด)")
     lines = card["text"].split("\n")
@@ -104,7 +104,8 @@ def main() -> int:
     if not updates:
         print("[bot] no new messages")
         return 0
-    watch = json.loads(SCOUT_STATE.read_text()).get("watch", {}) if SCOUT_STATE.exists() else {}
+    scout_state = json.loads(SCOUT_STATE.read_text()) if SCOUT_STATE.exists() else {}
+    watch, sector_pe = scout_state.get("watch", {}), scout_state.get("sector_pe", {})
     replies, budget = [], MAX_PER_RUN
     for u in updates:
         st["offset"] = max(st["offset"], u["update_id"])
@@ -120,7 +121,7 @@ def main() -> int:
                 break
             budget -= 1
             try:
-                replies.append(check_card(t, watch))
+                replies.append(check_card(t, watch, sector_pe))
             except Exception as e:                      # never lose the offset because of one ticker
                 print(f"[bot] {t}: {type(e).__name__}")         # no URL (could contain the token)
                 replies.append({"text": f"⚠️ ดึงข้อมูล {sr.escape(t)} ไม่สำเร็จ ลองใหม่ภายหลัง"})

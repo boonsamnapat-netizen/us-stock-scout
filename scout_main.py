@@ -193,6 +193,7 @@ def main(argv=None) -> int:
         if hm:
             messages.append({"photo": hm, "caption": "🗺 แผนที่ตลาด 1 เดือน · ขนาด = มูลค่าบริษัท · เขียวขึ้น / แดงลง"})
         sec_pe = sector_medians(fund, fund["sector"].fillna("Unknown"), "forwardPE")
+        state["sector_pe"] = {k: round(float(v), 2) for k, v in sec_pe.dropna().items()}   # for /check cards
         ev = {} if a.demo else _safe(lambda: events.fetch(tops, pd.Timestamp(asof.date())), {})
         messages += [sr.card(t, cls, fund, est, stage, dd, close, sec_pe, ev.get(t)) for t in tops]
     elif len(cls):
